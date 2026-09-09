@@ -11,7 +11,7 @@ const {AgentManager}=await import('../lib/agent.mjs');
 const {startDashboard}=await import('../dashboard/server.mjs');
 const models=createServer((req,res)=>{res.setHeader('Content-Type','application/json');res.end(JSON.stringify({data:[{id:'ui-fixture-model'},{id:'ui-fixture-alternative'}]}));});
 await new Promise(r=>models.listen(0,'127.0.0.1',r));
-saveProfile({provider:'lmstudio',auth:'api',baseUrl:`http://127.0.0.1:${models.address().port}`,model:'ui-fixture-model',key:''});
+saveProfile({provider:'lmstudio',auth:'api',baseUrl:`http://127.0.0.1:${models.address().port}`,model:'ui-fixture-model',contextWindow:128000,key:''});
 const store=new SessionStore();
 const manager=new AgentManager(store,{sdkLoader:async()=>({query:({prompt,options})=>{
   const q=(async function*(){
@@ -26,7 +26,7 @@ const manager=new AgentManager(store,{sdkLoader:async()=>({query:({prompt,option
       yield {type:'assistant',message:{id:'timeline-bash',content:[{type:'tool_use',id:'bash-fixture',name:'Bash',input:{command:'npm test -- --test-name-pattern=timeline',description:'Run focused timeline test'}}]}};
       yield {type:'user',message:{content:[{type:'tool_result',tool_use_id:'bash-fixture',content:'1 test passed\n0 tests failed'}]}};
       yield {type:'assistant',message:{id:'timeline-finish',content:[{type:'text',text:'The focused check passed.'}]}};
-      yield {type:'result',is_error:false,session_id:'ui-fixture-session'};return;
+      yield {type:'result',is_error:false,session_id:'ui-fixture-session',usage:{input_tokens:42000,output_tokens:250}};return;
     }
     if(prompt.includes('question fixture')){
       const input={questions:[{question:'What would you like to improve first?',header:'Focus',multiSelect:false,options:[{label:'The conversation',description:'Make reading and replying feel more natural.'},{label:'The activity view',description:'Bring clarity to tools, progress, and results.'},{label:'The overall layout',description:'Refine spacing and navigation across the studio.'}]},{question:'Which details matter most?',header:'Details',multiSelect:true,options:[{label:'Keyboard access',description:'Keep every action reachable without a mouse.'},{label:'Mobile layout',description:'Keep the composer comfortable on a small screen.'},{label:'Clear feedback',description:'Show exactly what the agent needs from you.'}]}]};

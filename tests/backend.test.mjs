@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from 'node:http';
 const temp=mkdtempSync(join(tmpdir(),'portable-ai-tests-'));process.env.PORTABLE_AI_DATA_DIR=join(temp,'data');
-const { saveProfile,readConfig,publicConfig,redact,parseLegacy,migrateLegacy,validateBaseURL }=await import('../lib/config.mjs');
+const { saveProfile,activateProfile,readConfig,publicConfig,redact,parseLegacy,migrateLegacy,validateBaseURL }=await import('../lib/config.mjs');
 const { PROVIDERS,providerEnvironment,testConnection }=await import('../lib/providers.mjs');
 const { SessionStore }=await import('../lib/sessions.mjs');
 const { AgentManager }=await import('../lib/agent.mjs');
@@ -16,12 +16,14 @@ const { pickWorkspace }=await import('../lib/workspace-picker.mjs');
 test.after(()=>rmSync(temp,{recursive:true,force:true}));
 const profile={provider:'custom',model:'test-model',auth:'api',baseUrl:'http://127.0.0.1:9099/v1',key:'test-secret-not-real'};
 test('all nine providers and safe configuration round trips',()=>{
-  assert.equal(Object.keys(PROVIDERS).length,9);saveProfile(profile);
+  assert.equal(Object.keys(PROVIDERS).length,9);saveProfile({...profile,contextWindow:128000});
+  assert.equal(readConfig().profiles.custom.contextWindow,128000);assert.throws(()=>saveProfile({...profile,contextWindow:100}),/Context window/);
   assert.equal(readConfig().profiles.custom.key,profile.key);assert.equal(publicConfig().profiles.custom.hasKey,true);assert.equal(publicConfig().profiles.custom.key,undefined);
   saveProfile({...profile,key:undefined,model:'next'});assert.equal(readConfig().profiles.custom.key,profile.key);saveProfile(profile);
   assert.equal(redact(`value ${profile.key}`),'value [REDACTED]');
   assert.throws(()=>validateBaseURL('http://remote.example/v1'),/HTTPS/);assert.throws(()=>validateBaseURL('https://key:secret@example.com'),/without credentials/);
-  saveProfile({provider:'openrouter',model:'free-test',auth:'api',baseUrl:'https://openrouter.ai/api/v1',key:'fixture-key'});assert.equal(readConfig().profiles.openrouter.baseUrl,'https://openrouter.ai/api');saveProfile(profile);
+  saveProfile({provider:'openrouter',model:'free-test',auth:'api',baseUrl:'https://openrouter.ai/api/v1',key:'fixture-key'});assert.equal(readConfig().profiles.openrouter.baseUrl,'https://openrouter.ai/api');
+  assert.equal(activateProfile('openrouter').active,'openrouter');assert.throws(()=>activateProfile('gemini'),/Configure/);saveProfile(profile);
 });
 test('legacy config parsing handles CRLF and keeps equal signs',()=>{
   const env=parseLegacy('# c\r\nAI_PROVIDER=openai\r\nOPENAI_BASE_URL=https://openrouter.ai/api/v1\r\nOPENAI_API_KEY=abc=def\r\nOPENAI_MODEL=model-a\r\n');
@@ -71,28 +73,47 @@ test('dashboard blocks unauthenticated, cross-origin and rebinding requests',asy
   assert.equal((await fetch(`${app.origin}/api/config`,{headers:{'X-Portable-Token':app.token,Origin:'http://evil.example'}})).status,403);
   const rebinding=await new Promise((resolve,reject)=>{const req=request(`${app.origin}/api/config`,{headers:{'X-Portable-Token':app.token,Host:'evil.example'}},res=>{res.resume();resolve(res.statusCode);});req.on('error',reject);req.end();});assert.equal(rebinding,403);
   const response=await fetch(`${app.origin}/api/config`,{headers:{'X-Portable-Token':app.token}});assert.equal(response.status,200);assert.doesNotMatch(await response.text(),/test-secret-not-real/);
+  const keyResponse=await fetch(`${app.origin}/api/config/key?provider=custom`,{headers:{'X-Portable-Token':app.token}});assert.equal(keyResponse.status,200);assert.deepEqual(await keyResponse.json(),{key:'test-secret-not-real'});
+  const switched=await fetch(`${app.origin}/api/config/active`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({provider:'openrouter'})});assert.equal(switched.status,200);assert.equal((await switched.json()).active,'openrouter');activateProfile('custom');
   const page=await fetch(app.origin);assert.match(page.headers.get('content-security-policy'),/frame-ancestors 'none'/);
   assert.equal((await fetch(`${app.origin}/data/settings.json`)).status,404);
   assert.equal((await fetch(`${app.origin}/api/config`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'text/plain'},body:'{}'})).status,415);
   const picked=await fetch(`${app.origin}/api/workspace/pick`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({initial:'/ignored'})});
   assert.deepEqual(await picked.json(),{workspace:temp,cancelled:false});
+  const created=await fetch(`${app.origin}/api/sessions`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({workspace:temp,trusted:true})});const session=await created.json();assert.equal(created.status,201);
+  const upload=await fetch(`${app.origin}/api/sessions/${session.id}/attachments`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({files:[{name:'screen.png',type:'image/png',data:Buffer.from('image fixture').toString('base64')}]})});const uploaded=await upload.json();assert.equal(upload.status,201);assert.equal(uploaded.attachments[0].name,'screen.png');
+  assert.equal((await fetch(`${app.origin}/api/sessions/${session.id}`,{method:'DELETE',headers:{'X-Portable-Token':app.token}})).status,200);
   const tested=await fetch(`${app.origin}/api/connection/test`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify(profile)});
   assert.deepEqual(await tested.json(),{ok:true,message:'Validated custom'});
 });
 test('SDK bridge forwards approval decisions, stores real session IDs and resumes',async()=>{
   saveProfile({...profile,provider:'lmstudio',baseUrl:PROVIDERS.lmstudio.baseUrl});const p=readConfig().profiles.lmstudio;
-  const store=new SessionStore(join(temp,'agent-sessions'));const s=store.create({workspace:temp,profile:p,trusted:true});let decisions=[],resumes=[];
-  const manager=new AgentManager(store,{executable:()=>'/fake/claude',sdkLoader:async()=>({query:({options})=>{
-    resumes.push(options.resume);const q=(async function*(){yield {type:'system',subtype:'init',session_id:'sdk-session-123'};
+  const store=new SessionStore(join(temp,'agent-sessions'));const s=store.create({workspace:temp,profile:p,trusted:true});let decisions=[],resumes=[],prompts=[],visible=[];
+  const manager=new AgentManager(store,{executable:()=>'/fake/claude',sdkLoader:async()=>({query:({prompt,options})=>{
+    prompts.push(prompt);resumes.push(options.resume);const q=(async function*(){yield {type:'system',subtype:'init',session_id:'sdk-session-123'};
       decisions.push(await options.canUseTool('Write',{file_path:'file.txt',content:'hello'},{signal:new AbortController().signal,toolUseID:'tool1'}));
       yield {type:'assistant',message:{id:'a',content:[{type:'text',text:'Done.'}]}};
       yield {type:'result',session_id:'sdk-session-123',is_error:false,usage:{input_tokens:10,output_tokens:5},total_cost_usd:0.001};})();q.close=()=>{};return q;
   }})});
   for(const approved of [true,false]){
-    const run=await manager.start(s.id,'test',{},event=>{if(event.type==='approval')setImmediate(()=>manager.approve(s.id,event.requestId,approved));});await run.promise;
+    const run=await manager.start(s.id,'test',approved?{attachments:[{id:'file-id',name:'screen.png',type:'image/png',size:12,path:'/private/verified/screen.png'}]}:{},event=>{visible.push(event);if(event.type==='approval')setImmediate(()=>manager.approve(s.id,event.requestId,approved));});await run.promise;
   }
-  assert.equal(decisions[0].behavior,'allow');assert.equal(decisions[1].behavior,'deny');assert.equal(resumes[1],'sdk-session-123');assert.equal(store.get(s.id).sdkSessionId,'sdk-session-123');assert.equal(store.get(s.id).status,'completed');
+  assert.match(prompts[0],/screen\.png.*\/private\/verified\/screen\.png/);assert.doesNotMatch(JSON.stringify(visible.filter(event=>event.type==='message')),/\/private\/verified/);
+  assert.equal(visible.find(event=>event.type==='message'&&event.role==='user').attachments[0].name,'screen.png');assert.equal(decisions[0].behavior,'allow');assert.equal(decisions[1].behavior,'deny');assert.equal(resumes[1],'sdk-session-123');assert.equal(store.get(s.id).sdkSessionId,'sdk-session-123');assert.equal(store.get(s.id).status,'completed');
   await assert.rejects(manager.start(s.id,'bad',{unrestricted:true}),/confirmation/);
+});
+test('OpenAI adapters resume the same native Claude conversation',async()=>{
+  saveProfile(profile);const p=readConfig().profiles.custom;
+  const store=new SessionStore(join(temp,'adapter-handoff-sessions')),s=store.create({workspace:temp,profile:p,trusted:true});const calls=[];let turn=0;
+  const manager=new AgentManager(store,{executable:()=>'/fake/claude',sdkLoader:async()=>({query:({prompt,options})=>{calls.push({prompt,resume:options.resume});const q=(async function*(){yield {type:'system',subtype:'init',session_id:`fresh-${++turn}`};yield {type:'assistant',message:{id:`a-${turn}`,content:[{type:'text',text:turn===1?'Your name is usaram.':'It is usaram.'}]}};yield {type:'result',is_error:false};})();q.close=()=>{};return q;}})});
+  await(await manager.start(s.id,'my name is usaram')).promise;
+  await(await manager.start(s.id,"what's my name?")).promise;
+  assert.equal(calls[1].resume,'fresh-1');assert.equal(calls[1].prompt,"what's my name?");
+});
+test('native Claude terminal conversations are imported with their project and timeline',()=>{
+  saveProfile(profile);const id='11111111-2222-4333-8444-555555555555',project=join(process.env.PORTABLE_AI_DATA_DIR,'claude','custom-api','projects','fixture-project');mkdirSync(project,{recursive:true});
+  const rows=[{type:'user',cwd:temp,timestamp:'2026-01-01T00:00:00.000Z',message:{content:[{type:'text',text:'Terminal conversation'}]}},{type:'assistant',cwd:temp,timestamp:'2026-01-01T00:00:01.000Z',message:{id:'a',model:'test-model',content:[{type:'text',text:'Shared reply'}]}}];writeFileSync(join(project,`${id}.jsonl`),rows.map(JSON.stringify).join('\n')+'\n');
+  const store=new SessionStore(join(temp,'native-import-sessions'));store.syncNative(readConfig());const imported=store.list().find(session=>session.sdkSessionId===id);assert.ok(imported);assert.equal(imported.workspace,temp);assert.equal(imported.nativeConversation,true);assert.deepEqual(store.get(imported.id).transcript.map(event=>event.text),['Terminal conversation','Shared reply']);
 });
 test('composer permissions map to the SDK and unrestricted access requires confirmation',async()=>{
   saveProfile({...profile,provider:'lmstudio',baseUrl:PROVIDERS.lmstudio.baseUrl});const p=readConfig().profiles.lmstudio;
@@ -127,6 +148,20 @@ test('model response waits stop at the configured limit',async()=>{
   }})});
   await(await manager.start(s.id,'wait forever')).promise;
   assert.equal(store.get(s.id).status,'failed');assert.match(store.get(s.id).error,/did not respond within .*stopped automatically/i);assert.equal(manager.runs.size,0);
+});
+test('runtime provider errors fail immediately with their real message',async()=>{
+  saveProfile({provider:'lmstudio',model:'error-model',auth:'api',baseUrl:PROVIDERS.lmstudio.baseUrl,key:''});const p=readConfig().profiles.lmstudio;
+  const store=new SessionStore(join(temp,'provider-error-sessions')),s=store.create({workspace:temp,profile:p,trusted:true});
+  const manager=new AgentManager(store,{executable:()=>'/fake/claude',responseTimeoutMs:5000,sdkLoader:async()=>({query:({options})=>{
+    const q=(async function*(){options.stderr('API Error: HTTP 401 upstream credential rejected');await new Promise((resolve,reject)=>{const abort=()=>reject(new Error('aborted'));options.abortController.signal.addEventListener('abort',abort,{once:true});if(options.abortController.signal.aborted)abort();});})();q.interrupt=async()=>{};q.close=()=>{};return q;
+  }})});
+  const started=Date.now();await(await manager.start(s.id,'fail fast')).promise;
+  assert.equal(store.get(s.id).status,'failed');assert.match(store.get(s.id).error,/HTTP 401 upstream credential rejected/);assert.ok(Date.now()-started<1000);
+});
+test('opaque runtime failures become honest provider diagnostics',async()=>{
+  const p=readConfig().profiles.lmstudio;const store=new SessionStore(join(temp,'opaque-error-sessions')),s=store.create({workspace:temp,profile:p,trusted:true});
+  const manager=new AgentManager(store,{executable:()=>'/fake/claude',sdkLoader:async()=>({query:()=>{const q=(async function*(){yield {type:'result',is_error:true,errors:['Internal server error']};})();q.close=()=>{};return q;}})});
+  await(await manager.start(s.id,'trigger opaque error')).promise;const error=store.get(s.id).error;assert.match(error,/LM Studio request failed.*model.*no diagnostic details/i);assert.doesNotMatch(error,/^Internal server error$/i);
 });
 test('multiple blocks with one SDK message ID retain text and tools',async()=>{
   const p=readConfig().profiles.lmstudio;const store=new SessionStore(join(temp,'blocks-sessions'));const s=store.create({workspace:temp,profile:p,trusted:true});

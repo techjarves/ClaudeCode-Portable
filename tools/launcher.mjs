@@ -7,6 +7,8 @@ import { readConfig, saveProfile } from '../lib/config.mjs';
 import { PROVIDERS, providerEnvironment } from '../lib/providers.mjs';
 import { executableAt, installRuntime, runtimeStatus, rollbackRuntime, run } from '../lib/runtime.mjs';
 import { startAdapter } from '../lib/adapter.mjs';
+import { startExternalAdapter } from '../lib/external-adapter.mjs';
+import { startResponsesAdapter } from '../lib/responses-adapter.mjs';
 
 async function main() {
   let [command, ...args] = process.argv.slice(2);
@@ -63,10 +65,11 @@ async function main() {
     const answer = await rl.question('Unrestricted mode can execute commands and change files without asking. Type UNRESTRICTED: '); rl.close();
     if (answer !== 'UNRESTRICTED') throw new Error('Unrestricted mode cancelled');
   }
-  const adapter = PROVIDERS[profile.provider].transport === 'openai' ? await startAdapter(profile) : null;
+  const useAdapter = PROVIDERS[profile.provider].transport === 'openai';
+  const adapter = !useAdapter ? null : profile.adapter === 'external' ? await startExternalAdapter(profile) : profile.adapter === 'responses' ? await startResponsesAdapter(profile) : await startAdapter(profile);
   const env = providerEnvironment(profile, { adapter });
   if (adapter) env.MAX_THINKING_TOKENS = '0';
-  console.log(`\nOfficial Claude Code → ${PROVIDERS[profile.provider].name} / ${profile.model}\nNon-Claude models have provider-dependent feature compatibility.\n`);
+  console.log(`\nOfficial Claude Code → ${PROVIDERS[profile.provider].name} / ${profile.model}${useAdapter && profile.adapter === 'external' ? ` · external adapter (${profile.toolFormat || 'native'})` : useAdapter && profile.adapter === 'responses' ? ' · Responses API adapter' : ''}\nNon-Claude models have provider-dependent feature compatibility.\n`);
   try { await run(executableAt(), ['--model',profile.model,...args], { stdio:'inherit', env, cwd: process.cwd() }); }
   finally { await adapter?.close(); }
 }

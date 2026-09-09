@@ -3,16 +3,18 @@ import { readFileSync, existsSync, statSync, appendFileSync, mkdirSync } from 'n
 import { join, extname } from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { ROOT, DATA, RUNTIME, LOGS } from '../lib/paths.mjs';
-import { readConfig, publicConfig, saveProfile, redact, validateBaseURL } from '../lib/config.mjs';
+import { ROOT, DATA, RUNTIME, LOGS, CHAT_WORKSPACE } from '../lib/paths.mjs';
+import { readConfig, publicConfig, saveProfile, activateProfile, redact, validateBaseURL } from '../lib/config.mjs';
 import { PROVIDERS, discoverModels, testConnection } from '../lib/providers.mjs';
 import { runtimeStatus, installRuntime, rollbackRuntime, listLogs } from '../lib/runtime.mjs';
 import { SessionStore } from '../lib/sessions.mjs';
 import { AgentManager } from '../lib/agent.mjs';
+import { externalAdapterAvailable } from '../lib/external-adapter.mjs';
 import { readBody, json } from '../lib/http.mjs';
 import { localStatus, startLocal, stopLocal, pullModel } from '../lib/local-models.mjs';
 import { sessionTranscript } from '../lib/transcript.mjs';
 import { pickWorkspace } from '../lib/workspace-picker.mjs';
+import { removeAttachments, resolveAttachments, saveAttachments } from '../lib/attachments.mjs';
 
 export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||3000),store=new SessionStore(),manager,token=randomBytes(32).toString('hex'),workspacePicker=pickWorkspace,connectionTester=testConnection}={}) {
   store.recover(); manager ||= new AgentManager(store);
@@ -43,9 +45,17 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
       if(!validToken(req.headers['x-portable-token']))return json(res,401,{error:'Open the dashboard using the launch link in your terminal'});
       if(!['GET','POST','DELETE'].includes(req.method))return json(res,405,{error:'Method not allowed'});
       if(req.method==='POST'&&!req.headers['content-type']?.startsWith('application/json'))return json(res,415,{error:'JSON required'});
-      const body=req.method==='POST'?await readBody(req):{};
-      if(url.pathname==='/api/bootstrap'&&req.method==='GET')return json(res,200,{config:publicConfig(),providers:PROVIDERS,sessions:store.list(),runtime:await runtimeStatus(),workspace:ROOT,responseTimeoutMs:manager.responseTimeoutMs});
+      const body=req.method==='POST'?await readBody(req,url.pathname.endsWith('/attachments')?28*1024*1024:4*1024*1024):{};
+      if(url.pathname==='/api/bootstrap'&&req.method==='GET'){const config=readConfig();store.syncNative(config,new Set(manager.runs.keys()));return json(res,200,{config:publicConfig(config),providers:PROVIDERS,adapterOptions:['builtin','external','responses'],externalAdapterAvailable:externalAdapterAvailable(),sessions:store.list(),runtime:await runtimeStatus(),workspace:ROOT,responseTimeoutMs:manager.responseTimeoutMs});}
       if(url.pathname==='/api/config'&&req.method==='GET')return json(res,200,publicConfig());
+      if(url.pathname==='/api/config/key'&&req.method==='GET'){
+        const provider=url.searchParams.get('provider');if(!PROVIDERS[provider])throw new Error('Unknown provider');
+        return json(res,200,{key:readConfig().profiles[provider]?.key||''});
+      }
+      if(url.pathname==='/api/config/active'&&req.method==='POST'){
+        if(manager.runs.size)throw new Error('Stop the active turn before switching models');
+        return json(res,200,activateProfile(body.provider));
+      }
       if(url.pathname==='/api/config'&&req.method==='POST'){
         if(manager.runs.size)throw new Error('Stop active turns before changing provider settings');
         return json(res,200,saveProfile(body));
@@ -66,17 +76,19 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
       if(url.pathname==='/api/workspace/pick'&&req.method==='POST'){
         const workspace=await workspacePicker(body.initial||ROOT);return json(res,200,{workspace,cancelled:!workspace});
       }
-      if(url.pathname==='/api/sessions'&&req.method==='GET')return json(res,200,{sessions:store.list(),legacy:store.legacy()});
+      if(url.pathname==='/api/sessions'&&req.method==='GET'){store.syncNative(readConfig(),new Set(manager.runs.keys()));return json(res,200,{sessions:store.list(),legacy:store.legacy()});}
       if(url.pathname==='/api/sessions'&&req.method==='POST'){
         const config=readConfig(),profile=config.profiles[config.active];if(!profile)throw new Error('Configure a provider first');
-        return json(res,201,store.create({workspace:body.workspace,profile,trusted:body.trusted===true}));
+        const projectless=body.projectless===true;if(projectless)mkdirSync(CHAT_WORKSPACE,{recursive:true,mode:0o700});
+        return json(res,201,store.createConversation({workspace:projectless?CHAT_WORKSPACE:body.workspace,profile,trusted:body.trusted===true,projectless}));
       }
-      const match=url.pathname.match(/^\/api\/sessions\/([a-f0-9-]+)(?:\/(run|approve|cancel|events))?$/);
+      const match=url.pathname.match(/^\/api\/sessions\/([a-f0-9-]+)(?:\/(run|approve|cancel|events|attachments))?$/);
       if(match){
         const [,id,action]=match;
         if(!store.get(id))return json(res,404,{error:'Session not found'});
         if(!action&&req.method==='GET'){const session=store.get(id);return json(res,200,{...session,transcript:sessionTranscript(session)});}
-        if(!action&&req.method==='DELETE'){if(manager.runs.has(id))throw new Error('Stop this session before deleting it');store.delete(id);return json(res,200,{ok:true});}
+        if(!action&&req.method==='DELETE'){if(manager.runs.has(id))throw new Error('Stop this session before deleting it');store.delete(id);removeAttachments(id);return json(res,200,{ok:true});}
+        if(action==='attachments'&&req.method==='POST')return json(res,201,{attachments:saveAttachments(id,body.files)});
         if(action==='approve'&&req.method==='POST'){manager.approve(id,body.requestId,body.approved===true,body.answers);return json(res,200,{ok:true});}
         if(action==='cancel'&&req.method==='POST'){await manager.cancel(id);return json(res,200,{ok:true});}
         if((action==='run'&&req.method==='POST')||(action==='events'&&req.method==='GET')){
@@ -84,7 +96,7 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
           if(restartRequired)throw new Error('Runtime changed. Restart the studio to load the verified runtime and SDK together.');
           let send;const queue=[];const listener=e=>send?send(e):queue.push(e);
           let active;
-          if(action==='run')active=await manager.start(id,body.prompt,body,listener);
+          if(action==='run')active=await manager.start(id,body.prompt,{...body,attachments:resolveAttachments(id,body.attachments)},listener);
           else{active=manager.runs.get(id);if(!active)return json(res,409,{error:'No active turn to reconnect'});active.listeners.add(listener);}
           res.writeHead(200,{'Content-Type':'text/event-stream','Connection':'keep-alive','Cache-Control':'no-store'});
           send=e=>res.write(`data: ${JSON.stringify(e)}\n\n`);queue.forEach(send);

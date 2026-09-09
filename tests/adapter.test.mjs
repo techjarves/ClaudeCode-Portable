@@ -16,8 +16,20 @@ test('rejects unsupported thinking, content, tools and roles',()=>{
   assert.equal(translateRequest({...input,messages:[{role:'system',content:'Keep runtime reminder'}]},'m').messages[1].content,'Keep runtime reminder');
 });
 test('translates image blocks and error tool results without removing them',()=>{
-  const req=translateRequest({...input,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/png',data:'AAAA'}}]}]},'m');
+  const image={type:'image',source:{type:'base64',media_type:'image/png',data:'AAAA'}};
+  const req=translateRequest({...input,messages:[{role:'user',content:[image]}]},'m');
   assert.equal(req.messages[1].content[0].image_url.url,'data:image/png;base64,AAAA');
+  const toolImage=translateRequest({...input,messages:[{role:'assistant',content:[{type:'tool_use',id:'read-1',name:'Read',input:{}}]},{role:'user',content:[{type:'tool_result',tool_use_id:'read-1',content:[image]}]}]},'m');
+  assert.equal(toolImage.messages.at(-2).role,'tool');assert.equal(toolImage.messages.at(-1).content[1].image_url.url,'data:image/png;base64,AAAA');
+});
+test('preserves Gemini thought signatures across tool-call history',async()=>{
+  const metadata={google:{thought_signature:'opaque-signature'}},remembered=new Map();
+  const body=translateResponse({choices:[{message:{tool_calls:[{id:'call-1',extra_content:metadata,function:{name:'Read',arguments:'{}'}}]},finish_reason:'tool_calls'}]},'gemini',{onToolCall:(id,value)=>remembered.set(id,value)});
+  assert.equal(body.content[0].id,'call-1');
+  const next=translateRequest({...input,messages:[{role:'assistant',content:[{type:'tool_use',id:'call-1',name:'Read',input:{}}]}]},'gemini',{toolMetadata:remembered});
+  assert.deepEqual(next.messages.at(-1).tool_calls[0].extra_content,metadata);
+  const streamed=[];await translateStream(chunks([{choices:[{delta:{tool_calls:[{index:0,id:'call-2',extra_content:metadata,function:{name:'Bash',arguments:'{}'}}]},finish_reason:'tool_calls'}]},'[DONE]']),'gemini',()=>{},{onToolCall:(id,value)=>streamed.push([id,value])});
+  assert.deepEqual(streamed,[['call-2',metadata]]);
 });
 test('non-streaming responses preserve tool calls, usage and stop reasons',()=>{
   const body=translateResponse({id:'x',choices:[{message:{content:'Now',tool_calls:[{id:'a',function:{name:'Write',arguments:'{"a":1}'}}]},finish_reason:'tool_calls'}],usage:{prompt_tokens:12,completion_tokens:4}},'m');
@@ -49,4 +61,14 @@ test('adapter cancellation propagates to the upstream request',async t=>{
   const controller=new AbortController();const request=fetch(`${app.url}/v1/messages`,{method:'POST',headers:{Authorization:`Bearer ${app.token}`},body:JSON.stringify(input),signal:controller.signal}).catch(()=>{});
   await ready;controller.abort();await request;
   await new Promise(resolve=>upstreamSignal.aborted?resolve():upstreamSignal.addEventListener('abort',resolve,{once:true}));assert.equal(upstreamSignal.aborted,true);
+});
+test('adapter reports the sanitized upstream error immediately',async t=>{
+  let reported;
+  const app=await startAdapter({baseUrl:'http://example.test/v1',model:'m',key:'private-key'},{fetchImpl:async()=>new Response(JSON.stringify({error:{message:'Rejected private-key for this model'}}),{status:400}),onError:message=>{reported=message;}});t.after(()=>app.close());
+  const res=await fetch(`${app.url}/v1/messages`,{method:'POST',headers:{Authorization:`Bearer ${app.token}`,'Content-Type':'application/json'},body:JSON.stringify(input)});
+  assert.equal(res.status,400);assert.match(reported,/HTTP 400.*Rejected.*\[REDACTED\]/);assert.doesNotMatch(reported,/private-key/);
+});
+test('adapter preserves a plain-text upstream error body',async t=>{
+  let reported;const app=await startAdapter({baseUrl:'http://example.test/v1',model:'m'},{fetchImpl:async()=>new Response('model context length exceeded',{status:413}),onError:value=>{reported=value;}});t.after(()=>app.close());
+  await fetch(`${app.url}/v1/messages`,{method:'POST',headers:{Authorization:`Bearer ${app.token}`,'Content-Type':'application/json'},body:JSON.stringify(input)});assert.match(reported,/HTTP 413.*context length exceeded/);
 });
