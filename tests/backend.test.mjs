@@ -13,6 +13,7 @@ const { startDashboard }=await import('../dashboard/server.mjs');
 const { installRuntime,rollbackRuntime }=await import('../lib/runtime.mjs');
 const { sessionTranscript }=await import('../lib/transcript.mjs');
 const { pickWorkspace }=await import('../lib/workspace-picker.mjs');
+const { nativeSessionId }=await import('../lib/native-sessions.mjs');
 test.after(()=>rmSync(temp,{recursive:true,force:true}));
 const profile={provider:'custom',model:'test-model',auth:'api',baseUrl:'http://127.0.0.1:9099/v1',key:'test-secret-not-real'};
 test('all nine providers and safe configuration round trips',()=>{
@@ -60,10 +61,11 @@ test('failed runtime installation preserves the working copy',async()=>{
   assert.equal(readFileSync(join(target,'keep.txt'),'utf8'),'working');assert.equal(existsSync(join(temp,'runtime/install.lock')),false);
 });
 test('verified runtime replacement retains the old copy and rollback restores it',async()=>{
-  const target=join(temp,'transaction/current');
+  const target=join(temp,'transaction/current');let installArgs;
   const writeRuntime=(dir,tag)=>{mkdirSync(join(dir,'node_modules/@anthropic-ai/claude-code/bin'),{recursive:true});writeFileSync(join(dir,'node_modules/@anthropic-ai/claude-code/package.json'),JSON.stringify({bin:{claude:'bin/claude.exe'}}));writeFileSync(join(dir,'node_modules/@anthropic-ai/claude-code/bin/claude.exe'),tag);};
   writeRuntime(target,'old');
-  await installRuntime({target,runner:async(cmd,args,options)=>{if(args[0]==='--version')return '2.1.247 (Claude Code)';writeRuntime(options.cwd,'new');return '';}});
+  await installRuntime({target,runner:async(cmd,args,options)=>{if(args[0]==='--version')return '2.1.247 (Claude Code)';installArgs=args;writeRuntime(options.cwd,'new');return '';}});
+  assert.equal(installArgs[installArgs.indexOf('--no-fund')+1],'--save=false');
   const exe='node_modules/@anthropic-ai/claude-code/bin/claude.exe';assert.equal(readFileSync(join(target,exe),'utf8'),'new');
   await rollbackRuntime({target,runner:async()=> '2.1.247 (Claude Code)'});assert.equal(readFileSync(join(target,exe),'utf8'),'old');
 });
@@ -111,6 +113,7 @@ test('OpenAI adapters resume the same native Claude conversation',async()=>{
   assert.equal(calls[1].resume,'fresh-1');assert.equal(calls[1].prompt,"what's my name?");
 });
 test('native Claude terminal conversations are imported with their project and timeline',()=>{
+  assert.equal(nativeSessionId('C:\\Users\\Tech Jarves\\data\\claude\\custom-api\\projects\\fixture\\11111111-2222-4333-8444-555555555555.jsonl'),'11111111-2222-4333-8444-555555555555');
   saveProfile(profile);const id='11111111-2222-4333-8444-555555555555',project=join(process.env.PORTABLE_AI_DATA_DIR,'claude','custom-api','projects','fixture-project');mkdirSync(project,{recursive:true});
   const rows=[{type:'user',cwd:temp,timestamp:'2026-01-01T00:00:00.000Z',message:{content:[{type:'text',text:'Terminal conversation'}]}},{type:'assistant',cwd:temp,timestamp:'2026-01-01T00:00:01.000Z',message:{id:'a',model:'test-model',content:[{type:'text',text:'Shared reply'}]}}];writeFileSync(join(project,`${id}.jsonl`),rows.map(JSON.stringify).join('\n')+'\n');
   const store=new SessionStore(join(temp,'native-import-sessions'));store.syncNative(readConfig());const imported=store.list().find(session=>session.sdkSessionId===id);assert.ok(imported);assert.equal(imported.workspace,temp);assert.equal(imported.nativeConversation,true);assert.deepEqual(store.get(imported.id).transcript.map(event=>event.text),['Terminal conversation','Shared reply']);

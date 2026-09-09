@@ -29,6 +29,7 @@ export class ComposerRequests {
   }
   render(focus=false) {
     const item=this.active;this.panel.hidden=!item;
+    this.panel.classList.toggle('approval-request',!!item&&!this.isQuestion);this.panel.classList.toggle('question-request',!!item&&this.isQuestion);
     this.prompt.hidden=!!item&&!this.isQuestion;
     this.prompt.placeholder=item?'Or write your own answer…':'What would you like to build?';
     this.prompt.setAttribute('aria-label',item?'Your answer or additional details':'Message your coding agent');

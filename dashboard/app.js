@@ -52,6 +52,9 @@ const permissionNames={default:'Review actions',acceptEdits:'Allow file edits',b
 const requests=new ComposerRequests({panel:$('#composer-request'),prompt:$('#prompt'),decide:body=>api(`/api/sessions/${state.current.id}/approve`,body),changed:syncComposer});
 function syncComposer(){
   const pending=requests.active;
+  const actions=$('.composer-actions'),actionDeny=actions.querySelector(':scope > .request-deny'),panelDeny=$('#composer-request .request-deny');
+  if(!pending||requests.isQuestion)actionDeny?.remove();
+  else if(panelDeny){actionDeny?.remove();actions.insertBefore(panelDeny,$('#stop'));}
   $('#composer').classList.toggle('has-request',!!pending);$('#stop').hidden=!state.running;
   $('#send').hidden=state.running&&!pending;$('#send').disabled=!!state.current?.legacy||!!pending?.sending||(!pending&&!$('#prompt').value.trim()&&!state.attachments.length);
   const label=pending?(requests.isQuestion?(requests.finalQuestion?'Send answer':'Continue'):'Allow once'):'Send message';
@@ -59,7 +62,8 @@ function syncComposer(){
   $('#send').innerHTML=pending?`${pending.sending?'Sending…':label}${icon('arrow-right')}`:icon('arrow-up');
   $('#prompt').disabled=!!state.current?.legacy||!!pending?.sending;
   $('#attach-button').disabled=state.running||!!state.current?.legacy||!!pending;
-  $('#prompt').style.height='auto';$('#prompt').style.height=`${Math.min($('#prompt').scrollHeight,170)}px`;
+  const prompt=$('#prompt'),style=getComputedStyle(prompt),lineHeight=parseFloat(style.lineHeight)||23,padding=(parseFloat(style.paddingTop)||0)+(parseFloat(style.paddingBottom)||0),minHeight=Math.ceil(lineHeight*2+padding),maxHeight=Math.ceil(lineHeight*5+padding);
+  prompt.style.height='auto';const target=Math.min(maxHeight,Math.max(minHeight,prompt.scrollHeight));prompt.style.height=`${target}px`;prompt.style.overflowY=prompt.scrollHeight>maxHeight?'auto':'hidden';
 }
 function closePermissions(focus=false){$('#permission-menu').hidden=true;$('#permission-picker').setAttribute('aria-expanded','false');if(focus)$('#permission-picker').focus();}
 function openPermissions(){ $('#permission-menu').hidden=false;$('#permission-picker').setAttribute('aria-expanded','true');$('#permission-menu [aria-pressed="true"]').focus(); }
