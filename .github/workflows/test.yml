@@ -1,4 +1,4 @@
-name: Portable AI checks
+name: ClaudeCode-Portable checks
 on: [push, pull_request, workflow_dispatch]
 jobs:
   test:

@@ -24,7 +24,7 @@ async function main() {
   }
   if (!executableAt()) await installRuntime({ onOutput: s => process.stdout.write(s) });
   if (!command) {
-    console.log('\n  PORTABLE AI\n  Official Claude Code · Your choice of model\n\n  1  Open studio dashboard\n  2  Launch Claude Code terminal\n  3  Configure providers\n  4  Set up local models\n  5  Repair / update pinned runtime\n  6  Roll back runtime\n');
+    console.log('\n  CLAUDECODE-PORTABLE\n  Official Claude Code · Your choice of model\n\n  1  Open studio dashboard\n  2  Launch Claude Code terminal\n  3  Configure providers\n  4  Set up local models\n  5  Repair / update pinned runtime\n  6  Roll back runtime\n');
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     const answer = await rl.question('Choose [1]: '); rl.close();
     command = ({ '2': 'cli', '3': 'dashboard', '4': 'local-setup', '5': 'update', '6': 'rollback' })[answer] || 'dashboard';
@@ -38,7 +38,7 @@ async function main() {
   if (command === 'dashboard') {
     const { startDashboard } = await import('../dashboard/server.mjs');
     const dashboard = await startDashboard();
-    console.log(`\nPortable AI studio: ${dashboard.url}\nKeep this terminal open. Ctrl+C stops the studio.`);
+    console.log(`\nClaudeCode-Portable studio: ${dashboard.url}\nKeep this terminal open. Ctrl+C stops the studio.`);
     if (!process.env.PORTABLE_AI_NO_OPEN) {
       const op = process.platform === 'darwin' ? ['open',[dashboard.url]] : process.platform === 'win32' ? ['rundll32.exe',['url.dll,FileProtocolHandler',dashboard.url]] : ['xdg-open',[dashboard.url]];
       const child = spawn(op[0],op[1],{ stdio:'ignore',detached:true }); child.on('error',()=>{}); child.unref();
@@ -73,4 +73,4 @@ async function main() {
   try { await run(executableAt(), ['--model',profile.model,...args], { stdio:'inherit', env, cwd: process.cwd() }); }
   finally { await adapter?.close(); }
 }
-main().catch(e => { console.error(`\nPortable AI: ${e.message}`); process.exitCode=1; });
+main().catch(e => { console.error(`\nClaudeCode-Portable: ${e.message}`); process.exitCode=1; });

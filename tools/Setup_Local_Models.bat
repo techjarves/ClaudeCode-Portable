@@ -1,5 +1,5 @@
 @echo off
-title Portable AI USB - Local Model Setup
+title ClaudeCode-Portable - Local Model Setup
 cls
 
 echo.

@@ -1,162 +1,241 @@
-# Portable AI — Developer Studio
+# ClaudeCode-Portable — Portable AI Coding Agent
 
-A portable launcher and independent browser workspace powered by **official Anthropic Claude Code**, with nine provider configurations. No OpenClaude runtime is installed or used.
+> **Run a full-featured AI coding agent from a USB drive or any folder — no global installation required.**
+> Plug in. Launch. Code. Take it anywhere.
 
-The studio has graphite/teal dark and light themes, a resizable/collapsible project sidebar, grouped session search, streaming Markdown and highlighted code, a compact chronological tool timeline, explicit approvals, cancellation, session resume, attachments, local-model controls, and runtime diagnostics. The composer starts at two lines, grows to five, then scrolls. Below 1280px the inspector becomes a drawer; below 768px navigation does too.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
 
-## Screenshots
 
-### Studio dashboard
+**🎥 Watch the Setup & Demo Video:** [https://youtu.be/9Dh3kKWFFjg](https://youtu.be/9Dh3kKWFFjg)
 
-![Portable AI Studio dashboard](docs/images/studio-dashboard.png)
+[![ClaudeCode-Portable Demo](https://img.youtube.com/vi/9Dh3kKWFFjg/maxresdefault.jpg)](https://youtu.be/9Dh3kKWFFjg)
 
-### Provider settings
+---
 
-![Portable AI provider settings](docs/images/provider-settings.png)
+## Gallery
 
-### Official Claude Code terminal
+### Main Dashboard
+
+![ClaudeCode-Portable Studio dashboard](docs/images/studio-dashboard.png)
+
+### Provider Settings
+
+![ClaudeCode-Portable provider settings](docs/images/provider-settings.png)
+
+### Claude Code Terminal
 
 ![Official Claude Code terminal resume screen](docs/images/claude-code-terminal.png)
 
-## Start here
+---
 
-From this folder on macOS / Linux:
+## What Is This?
 
-```sh
-bash start.sh
-# Directly open the browser studio:
-bash start.sh dashboard
-# Or launch the real Claude Code terminal:
-bash start.sh cli
-```
+**ClaudeCode-Portable** is a fully portable AI coding workspace powered by the **official Anthropic Claude Code runtime and Agent SDK**. It bundles a self-contained Node.js runtime, nine provider configurations, a real Claude Code terminal, and a premium browser dashboard — all launched from `START.bat` on Windows or `start.sh` on Linux/macOS.
 
-On Windows:
+App-owned runtimes, provider settings, chat history, attachments, caches, and logs stay inside the project folder. Each operating system downloads its compatible runtime once and reuses it from the USB drive.
+
+---
+
+## Key Features
+
+| Feature | Details |
+|---|---|
+| **Official Claude Code** | Uses Anthropic's official CLI and Agent SDK — no replacement agent engine |
+| **9 AI Providers** | NVIDIA NIM · DeepSeek · OpenRouter · Google Gemini · Anthropic · OpenAI · Ollama · LM Studio · Custom API |
+| **Portable Runtime** | Node.js, Claude Code, caches, settings, and app data stay in the project folder |
+| **Studio Dashboard** | Streaming chat, Markdown, code highlighting, compact tool steps, approvals, attachments, and diagnostics |
+| **Shared Claude History** | GUI and portable terminal sessions use real Claude Code conversation IDs and can resume the same history |
+| **Project + Normal Chats** | Work inside a selected folder or start an agent conversation without attaching a project |
+| **Provider Switching** | Switch directly between configured provider/model profiles from the composer |
+| **Three Adapter Modes** | Built-in, external `claude-adapter`, and OpenAI Responses API support |
+| **Cross-Platform** | Windows, Linux, and macOS runtimes can coexist on the same portable drive |
+
+---
+
+## Quick Start
+
+### Windows
 
 ```powershell
 .\START.bat
-.\START.bat dashboard
-.\START.bat cli
 ```
 
-First launch downloads checksum-verified Node.js and installs pinned official packages inside `engine/`. No global npm installation or shell profile change is made. Windows needs PowerShell and network access for setup. macOS/Linux need Bash, curl and tar. Linux removable drives without symbolic-link support, including common NTFS mounts, use a link-free Node/npm layout automatically. The bundled Linux Node build requires glibc; Alpine/musl is not supported by this bootstrap. Runtime-specific OS requirements also apply. Git is useful for project operations; Windows can use the official runtime's PowerShell support without bundled Git.
+### Linux / macOS
 
-The launcher prints a loopback URL containing an ephemeral access token and opens it in your browser. Keep the terminal running. A plain visit to port 3000 without that token cannot use the APIs. If port 3000 is occupied, set `PORTABLE_AI_PORT` before launching. Set `PORTABLE_AI_NO_OPEN=1` to suppress automatic browser opening.
-
-In **Providers**, choose the provider, credential, endpoint and model; use **Discover models** or enter an exact identifier. Start a session and confirm its workspace. Do not point an agent at a directory you do not trust.
-
-Use the folder control in the top bar or composer to choose any local project with the operating system's folder picker. Every chat remains locked to the workspace where it started. Choosing another folder from an existing chat asks whether to start a new chat there or continue in the current workspace. Linux uses Zenity or KDialog when available and falls back to manual path entry.
-
-## Providers
-
-| Provider | Runtime connection | Default base URL |
-| --- | --- | --- |
-| Anthropic | Messages API; account login in terminal only | `https://api.anthropic.com` |
-| OpenRouter | Native Anthropic-compatible API | `https://openrouter.ai/api` |
-| DeepSeek | Native Anthropic-compatible API | `https://api.deepseek.com/anthropic` |
-| Ollama | Native Anthropic-compatible API | `http://127.0.0.1:11434` |
-| LM Studio | Native Anthropic-compatible API | `http://127.0.0.1:1234` |
-| NVIDIA NIM | Local Chat Completions adapter | `https://integrate.api.nvidia.com/v1` |
-| Google Gemini | Local Chat Completions adapter | `https://generativelanguage.googleapis.com/v1beta/openai` |
-| OpenAI | Local Chat Completions adapter | `https://api.openai.com/v1` |
-| Custom API | Local Chat Completions adapter | User supplied |
-
-For OpenRouter, `/api/v1` is the model-discovery/Chat Completions endpoint; the direct Claude Code connection uses `/api`. No paid fallback is selected automatically. The tested live model is `minimax/minimax-m3:free`; its availability, limits and pricing are controlled by OpenRouter.
-
-**Non-Claude models are experimental, not supported by Anthropic.** Model selection is not a guarantee of tool calling, context capacity, image support or feature parity. Errors identify unsupported capabilities instead of silently falling back. The built-in adapter supports text, base64 images (including images returned by the local Read tool), streaming, tool definitions/calls/results and stop reasons. The Responses adapter maps those images to `input_image`. Gemini OpenAI-compatible tool calls retain Google's opaque thought-signature metadata across tool steps. Extended thinking and provider-native server tools remain unsupported through the generic adapter. Token counting is an explicitly labeled estimate; the selected upstream model must itself support vision.
-
-OpenAI-compatible providers (NVIDIA, Gemini, OpenAI, Custom) offer three protocol choices. **Built-in** and **External claude-adapter** target `/chat/completions`; the external choice uses the pinned `claude-adapter` dependency and adds native/XML tool modes plus optional opus/sonnet/haiku aliases. **Responses API** targets `/responses` and forwards upstream text and function-call argument deltas incrementally as Anthropic SSE, with final usage and stop reasons preserved. All three run loopback-only with a per-run token and no home-folder writes. The external adapter does not support images; keep Built-in when you need vision. Changing the adapter starts a new session.
-
-All providers resume the native Claude Code session so GUI and portable terminal conversations remain the same history. Non-Claude models may have smaller context windows or incomplete resume/tool compatibility; use the composer context meter and choose a larger compatible model when necessary.
-
-Provider failures show the upstream HTTP status and response detail whenever the endpoint supplies them, including plain-text response bodies. If an endpoint returns only an opaque message such as `Internal server error`, the dashboard explicitly says that no diagnostic detail was provided and identifies the provider/model plus likely compatibility or context causes instead of presenting the generic message as a diagnosis.
-
-The official SDK executes the agent loop in the browser workflow. There is no separate custom agent loop and no prompt trimming. Auxiliary model roles use the selected provider model. Claude account credentials are never forwarded to another provider. Account-login profiles cannot run in the custom dashboard; use API credentials or local endpoints there.
-
-Read, Bash, edit, search, thinking, and assistant text are shown as one chronological conversation timeline in the exact order Claude Code emits them; tool calls are not regrouped above or below the related text. Each compact expandable tool step exposes its exact input and result while the right inspector remains a separate overview. New sessions persist this ordered timeline. Older sessions whose original event order was never recorded show an explicit history note instead of guessing where their tool calls occurred.
-
-Readable thinking blocks are shown only when they are actually returned by the selected model/runtime. Redacted thinking, signatures, and approximate thinking-token progress are never presented as reasoning, and the dashboard does not invent filler between tool calls. Generic adapter providers currently run with thinking disabled because provider-specific reasoning/signature formats are not portable.
-
-## Sessions and permissions
-
-- **Review actions** uses Claude Code's standard permission checks. Tools that need permission request approval; routine reads and some safe shell commands can run without a prompt.
-- **Allow file edits** uses the SDK's `acceptEdits` mode. File operations can run without prompting; other actions retain their permission checks. This is not a promise that every shell command will prompt.
-- Choose permissions beside the message field. Changes apply to the **next turn**, not a currently running action; the header and inspector show the current turn's mode. Reloading resets the next-turn selection to Review actions.
-- Choose any saved dashboard-compatible provider/model directly beside the message field. Switching starts a new chat with that profile and keeps the current chat in history; it is disabled while a turn is active. Configure another provider in **Settings → AI provider & model** and it appears there automatically.
-- The composer shows the latest request's input-token usage beside the selected model (`Context 42k / 128k`). Model discovery fills the limit when the provider reports it; otherwise set the model's context window in provider settings. The meter turns amber at 80% and red at 100%. It is per-request context usage, not cumulative billing usage.
-- Use the **+** button to attach screenshots, source files, documents, or ZIP archives (up to 10 files, 10 MB each, 20 MB total). Attachments are copied into a private per-session folder under portable `data/`; archives are not silently extracted or executed. The agent receives their verified local paths and handles inspection through the normal permission flow.
-- Questions and approval decisions live **inside the composer**, not the inspector. Questions support single/multiple selections, custom text, and Back/Continue navigation. Tool approvals show the action and expandable exact arguments; Deny, Stop, and the compact Allow once button stay together in one action row. Your unsent message draft is restored when requests finish. The inspector remains a read-only tool timeline.
-- **Unrestricted mode** requires typing `UNRESTRICTED` and resets when the browser reloads. Terminal bypass flags also require an interactive warning confirmation. Quick launch stays in normal mode.
-- A session is bound to its workspace and provider/model/auth/endpoint selection. Changing these starts a new session. API key rotation does not invalidate the binding.
-- GUI and portable terminal sessions share the official Claude Code session ID and native history. The dashboard discovers terminal-created native sessions and groups them under their working folder; continuing a discovered conversation resumes that same Claude session. Reopen a running GUI session after reconnecting and the agent continues while the browser is disconnected. Restarted-studio sessions are marked interrupted and can be resumed.
-- **New chat** starts a projectless agent conversation in a private portable workspace. It keeps the same models, tools, approvals and attachment support without referring to a project. **Open folder** starts a project-backed chat. The sidebar keeps collapsible project groups above projectless **Conversations**; project groups start collapsed. Drag its edge to resize it or use the top control to hide/show it.
-- You can open Settings during a turn and return to the highlighted active chat without stopping it; live text and tool events continue in the background. Switching to a different chat or workspace remains blocked until the active turn ends or is stopped.
-- Provider HTTP, authentication, rate-limit, connection, and protocol errors stop the turn immediately and show the provider's sanitized message. The two-minute timer is reserved for requests where neither the provider nor runtime returns any response. It is paused while an approval needs your input or a local tool is running, then applies again when the agent waits for the model.
-- The dashboard disables automatic loading of filesystem settings/hooks (`settingSources: []`). It does not automatically load your project's CLAUDE.md or plugins. The terminal retains the official CLI behavior. Workspaces still need to be trusted.
-- Legacy conversations remain read-only. OpenClaude session IDs are not Claude Code session IDs.
-
-Terminal resume:
-
-```sh
-bash resume.sh <official-session-id>
-# Windows: .\RESUME.bat <official-session-id>
+```bash
+chmod +x start.sh
+./start.sh
 ```
 
-## Local models
+On first launch, the project downloads checksum-verified Node.js and installs the pinned official Claude Code packages inside `engine/`. Every later launch reuses that installation.
 
-Run `bash start.sh local-setup` or `.\START.bat local-setup` for the existing interactive portable Ollama setup. Model selection happens before downloads. Setup now saves the new provider configuration. In the studio's **System** page, start the installed server, refresh the model list, or explicitly request a model download. Only Ollama processes started by this studio can be stopped by it. LM Studio is managed in its own application.
+> **First-time setup requires internet.** After setup, cloud providers still need internet; installed local Ollama models can run offline.
 
-Local inference needs a tool-capable model, adequate RAM/VRAM and enough context. An installed model can work without internet after initial package setup; local inference is not a promise that every Claude Code feature works offline.
+---
 
-## Runtime versions and updates
+## Project Structure
 
-- Bundled Node.js: **22.23.2**
-- Official Claude Code: **2.1.247**
-- Claude Agent SDK: **0.3.247**
-
-Dependencies are pinned in `tools/runtime-manifest.json`. Each platform has its own `engine/<os>-<arch>/current` installation. Installs stage a replacement, verify `claude --version`, then swap it into place, retaining `previous` for rollback. Failed installs preserve the working runtime. Background official updates are disabled for these managed copies.
-
-```sh
-bash start.sh install    # install / repair the pinned versions
-bash start.sh update     # apply the pinned manifest, not an untested latest release
-bash start.sh rollback   # restore previous runtime
-bash start.sh status
+```text
+ClaudeCode-Portable/
+│
+├── START.bat                  Windows launcher
+├── start.sh                  Linux/macOS launcher
+├── RESUME.bat                Resume a Claude session on Windows
+├── resume.sh                 Resume a Claude session on Linux/macOS
+│
+├── dashboard/                Browser studio interface
+├── lib/                      Providers, adapters, sessions, runtime, and agent bridge
+├── tests/                    Automated, smoke, live-provider, and UI fixture tests
+├── tools/                    Launcher, runtime manifest, checks, and local-model setup
+│
+├── data/                     Portable settings, credentials, chats, attachments, and logs
+└── engine/                   Per-platform Node.js and Claude Code runtimes
+    ├── node-<os>-<arch>/
+    └── <os>-<arch>/current/
 ```
 
-To upgrade, deliberately update the manifest, run tests, then apply it. Restart the dashboard after maintenance so the SDK and executable match. If an interrupted installer leaves `install.lock`, confirm no installation process is still running before removing that specific lock directory.
+`data/` and `engine/` are generated locally and ignored by Git.
 
-Each operating system and CPU architecture downloads its own Node.js and Claude Code runtime once, then reuses it from the same portable folder. Moving the folder between Windows, macOS and Linux can therefore leave several platform-specific directories under `engine/`; this is expected. npm installation disables generated binary links because the launcher resolves verified package executables directly. This also avoids npm 10.9.8's Windows save-step failure.
+---
 
-For a completely fresh-install test, use a copied/extracted project folder and remove only its generated `engine/` and `data/` directories before launching. Removing `data/` also removes that copy's API credentials, settings and chat history. Never delete those directories from your only working copy unless that loss is intentional.
+## Main Menu Options
 
-## Data and security boundaries
+Run `START.bat` or `start.sh` to open:
 
-`data/settings.json` stores provider credentials as plaintext, with owner-only POSIX permissions. `data/` and `engine/` are ignored by Git. Windows relies on the folder's inherited ACL. Protect the drive and do not share its data directory. The authenticated, loopback-only dashboard can retrieve a selected provider credential when you explicitly click its reveal icon; normal configuration/bootstrap responses remain redacted. Session and diagnostic output is redacted for configured credentials.
-
-The dashboard and adapter bind to `127.0.0.1`. API routes require the ephemeral token, validate Host/Origin and reject non-JSON mutations. Markdown is sanitized and external conversation images are blocked. The adapter has a separate per-run token and does not log credentials. This is not a network-hosted multi-user service or a filesystem sandbox.
-
-App-owned configuration, runtime sessions, caches and logs stay in the portable folder where supported. OS login credentials, subprocess tools and the official runtime can still use system facilities. **This is not a zero-footprint or fully portable-login guarantee.** Provider requests transmit prompts and relevant project content to the selected service.
-
-On first use, old `ai_settings.env` is copied to `ai_settings.env.pre-claude-code.bak` and mapped into version-2 settings without executing it. Existing data is not deleted. `PORTABLE_AI_DATA_DIR` can select an isolated data directory for tests.
-
-## Verification
-
-```sh
-npm test                 # offline unit and integration tests
-npm run check            # syntax and obsolete-runtime checks
-npm run smoke            # real CLI + SDK, scripted loopback provider, no paid API
-node tests/live-provider.mjs  # opt-in: uses the configured provider on a synthetic fixture
-node tests/ui-fixture.mjs     # isolated UI-only fixture on port 3001; never a live model
+```text
+1  Open studio dashboard
+2  Launch Claude Code terminal
+3  Configure providers
+4  Set up local models
+5  Repair / update pinned runtime
+6  Roll back runtime
 ```
 
-The real-runtime smoke test checks read → approved write → shell command → resume in a temporary path containing spaces. The UI fixture explicitly labels its synthetic activity and uses separate temporary settings; it is not loaded by the normal application.
+Pressing Enter selects the dashboard.
 
-Locally verified: 45 automated tests; macOS ARM64 installation and real runtime/SDK workflow with resume; Linux ARM64 link-free Node extraction and installation of all 228 pinned packages; a live OpenRouter MiniMax free-model read/write/command test; and a configured Custom Responses API connection with incremental streaming. Browser checks cover dark/light appearance, resizable/collapsible navigation, compact composer and approval controls, 390/768/1024/1440px layouts, provider forms, model discovery/search, code highlighting/copying and Markdown sanitization. Windows-specific regression coverage includes npm 10.9.8 installation and native Claude session paths. GitHub Actions runs checks, runtime installation and the scripted smoke test on Ubuntu, macOS and Windows. Other providers require live verification with suitable credentials/models. Local-model downloads were not run.
+---
 
-## License and attribution
+## Supported AI Providers
 
-This repository's wrapper retains its MIT license and original project history. Claude Code, the Agent SDK and other dependencies retain their own licenses and terms. “Portable AI” is an independent interface, not an official Anthropic product.
+| Provider | Connection | Get Started |
+|---|---|---|
+| **NVIDIA NIM** | Chat Completions adapter | [build.nvidia.com](https://build.nvidia.com) |
+| **DeepSeek** | Anthropic-compatible API | [platform.deepseek.com](https://platform.deepseek.com) |
+| **OpenRouter** | Anthropic-compatible API | [openrouter.ai](https://openrouter.ai) |
+| **Google Gemini** | Chat Completions adapter | [aistudio.google.com](https://aistudio.google.com) |
+| **Anthropic Claude** | Native Messages API / terminal login | [console.anthropic.com](https://console.anthropic.com) |
+| **OpenAI** | Chat Completions adapter | [platform.openai.com](https://platform.openai.com) |
+| **Ollama** | Local Anthropic-compatible endpoint | [ollama.com](https://ollama.com) |
+| **LM Studio** | Local Anthropic-compatible endpoint | [lmstudio.ai](https://lmstudio.ai) |
+| **Custom API** | Chat Completions or Responses API | Provider base URL + optional API key |
 
-- [Official Claude Code installation](https://code.claude.com/docs/en/installation)
-- [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview)
-- [OpenRouter integration](https://openrouter.ai/docs/guides/coding-agents/claude-code-integration)
-- [LM Studio integration](https://lmstudio.ai/docs/integrations/claude-code)
+> **Non-Claude models are experimental and are not supported by Anthropic.** Tool calling, images, context limits, resume behavior, and other Claude Code features depend on the selected model and provider.
+
+## Custom OpenAI-Compatible Provider
+
+OpenAI-compatible providers can use:
+
+- **Built-in** — streaming Chat Completions with tools and image support
+- **External claude-adapter** — native/XML tool modes and optional model aliases; no image support
+- **Responses API** — `/responses` support with incremental text and tool-argument streaming
+
+All adapters bind only to `127.0.0.1` and use a fresh local token for every run.
+
+---
+
+## LM Studio Setup
+
+1. Download and load a tool-capable model in LM Studio.
+2. Open **Developer → Local Server**.
+3. Start the server.
+4. In ClaudeCode-Portable, choose **LM Studio**.
+5. Keep `http://127.0.0.1:1234` unless you changed the server address.
+6. Discover the loaded model or enter its exact identifier.
+
+LM Studio is managed by its own application. The dashboard connects to its running local server.
+
+---
+
+## Local Ollama Models
+
+Run the interactive portable setup:
+
+```bash
+bash start.sh local-setup
+```
+
+```powershell
+.\START.bat local-setup
+```
+
+Local inference needs enough RAM/VRAM, a useful context window, and a model capable of tool calling. Model downloads can require several gigabytes.
+
+---
+
+## Portable Runtime
+
+| Component | Pinned Version |
+|---|---|
+| **Node.js** | `22.23.2` |
+| **Claude Code** | `2.1.247` |
+| **Claude Agent SDK** | `0.3.247` |
+| **claude-adapter** | `2.2.1` |
+
+Each OS/architecture stores its own runtime under `engine/`. Windows, macOS, Linux x64, and Linux ARM64 installations can coexist and are reused after their first download.
+
+Linux drives that cannot create symbolic links—including common NTFS USB mounts—automatically use a link-free Node/npm layout. npm binary links are disabled because the launcher resolves the verified package executable directly. The same install flow avoids npm 10.9.8's Windows save-step crash.
+
+Use menu options 5 and 6 to repair, update, or roll back the pinned runtime.
+
+---
+
+## Security & Privacy
+
+- Dashboard and adapter servers bind to `127.0.0.1` only.
+- Dashboard APIs require a fresh access token printed at launch.
+- Provider credentials are excluded from normal bootstrap/configuration responses.
+- API keys are stored as plaintext in portable `data/settings.json`; protect the drive.
+- Uploaded attachments remain inside private per-session folders under `data/`.
+- Markdown is sanitized before rendering.
+- Unrestricted mode requires explicit confirmation.
+- Prompts and relevant project content are sent to the provider you select.
+
+Official account login and subprocess tools may still use operating-system facilities. This project is portable for app-owned files, but it is not a guaranteed zero-footprint sandbox.
+
+---
+
+## System Requirements
+
+| Platform | Requirement |
+|---|---|
+| **Windows** | Windows 10 or later, PowerShell, and internet for first setup |
+| **Linux** | Bash, `curl`, `tar`, glibc, and internet for first setup |
+| **macOS** | Bash, `curl`, `tar`, and internet for first setup |
+
+Git is useful for agent-driven repository operations. Alpine/musl Linux is not supported by the bundled Node.js bootstrap.
+
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `Cannot create symlink ... Operation not permitted` on Linux USB | Pull the latest version and start again. NTFS/link-free mode is detected automatically. |
+| `Cannot read properties of undefined (reading 'spec')` on Windows | Pull the latest version. Runtime installation now uses `--save=false`. |
+| `Invalid session ID` after using terminal mode on Windows | Pull the latest version. Windows Claude history paths are now parsed correctly. |
+| Runtime installation was interrupted | Run option 5 or `start.sh install`. The previous verified runtime is preserved. |
+| Dashboard says disconnected | Use the newest tokenized URL printed by the currently running launcher. |
+| Port 3000 is already in use | Stop the earlier dashboard or set `PORTABLE_AI_PORT` before launching. |
+| Provider rejects the request | Read the full provider error shown in the chat and verify model/tool compatibility. |
+| Image says `Unsupported content: image` | Choose a vision-capable model and the Built-in or Responses adapter. |
+| Ollama or LM Studio is unavailable | Start the local model server and verify its base URL before discovering models. |
+| USB installation is slow | Use a USB 3.x drive/port and allow the first runtime installation to finish. |
+
+---
+
+## License
+
+MIT — use it, fork it, ship it.
+
+Claude Code, the Agent SDK, and other dependencies keep their own licenses and terms. ClaudeCode-Portable is an independent interface and is not an official Anthropic product.

@@ -137,4 +137,4 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
   origin=`http://127.0.0.1:${server.address().port}`;
   return {server,manager,token,origin,url:`${origin}/#token=${token}`,close:async()=>{pulls.forEach(c=>c.abort());await manager.close();try{if((await localStatus()).owned)stopLocal();}catch{}server.closeAllConnections();await new Promise(r=>server.close(r));}};
 }
-if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1])startDashboard().then(app=>{console.log(`Portable AI: ${app.url}`);for(const signal of ['SIGINT','SIGTERM'])process.once(signal,async()=>{await app.close();process.exit(0);});}).catch(e=>{console.error(e.message);process.exitCode=1;});
+if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1])startDashboard().then(app=>{console.log(`ClaudeCode-Portable: ${app.url}`);for(const signal of ['SIGINT','SIGTERM'])process.once(signal,async()=>{await app.close();process.exit(0);});}).catch(e=>{console.error(e.message);process.exitCode=1;});

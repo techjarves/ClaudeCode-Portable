@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════
-#  Portable AI USB - Local Model Setup (macOS/Linux)
+#  ClaudeCode-Portable - Local Model Setup (macOS/Linux)
 # ═══════════════════════════════════════════════════════════
 
 set -e
