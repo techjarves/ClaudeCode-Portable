@@ -10,7 +10,7 @@ const { PROVIDERS,providerEnvironment,testConnection }=await import('../lib/prov
 const { SessionStore }=await import('../lib/sessions.mjs');
 const { AgentManager }=await import('../lib/agent.mjs');
 const { startDashboard }=await import('../dashboard/server.mjs');
-const { installRuntime,rollbackRuntime }=await import('../lib/runtime.mjs');
+const { installRuntime,rollbackRuntime,manifest }=await import('../lib/runtime.mjs');
 const { sessionTranscript }=await import('../lib/transcript.mjs');
 const { pickWorkspace }=await import('../lib/workspace-picker.mjs');
 const { nativeSessionId }=await import('../lib/native-sessions.mjs');
@@ -62,7 +62,7 @@ test('failed runtime installation preserves the working copy',async()=>{
 });
 test('verified runtime replacement retains the old copy and rollback restores it',async()=>{
   const target=join(temp,'transaction/current');let installArgs;
-  const writeRuntime=(dir,tag)=>{mkdirSync(join(dir,'node_modules/@anthropic-ai/claude-code/bin'),{recursive:true});writeFileSync(join(dir,'node_modules/@anthropic-ai/claude-code/package.json'),JSON.stringify({bin:{claude:'bin/claude.exe'}}));writeFileSync(join(dir,'node_modules/@anthropic-ai/claude-code/bin/claude.exe'),tag);};
+  const writeRuntime=(dir,tag)=>{mkdirSync(join(dir,'node_modules/@anthropic-ai/claude-code/bin'),{recursive:true});writeFileSync(join(dir,'node_modules/@anthropic-ai/claude-code/package.json'),JSON.stringify({bin:{claude:'bin/claude.exe'}}));writeFileSync(join(dir,'node_modules/@anthropic-ai/claude-code/bin/claude.exe'),tag);for(const dep of Object.keys(manifest.dependencies)){if(dep==='@anthropic-ai/claude-code')continue;mkdirSync(join(dir,'node_modules',dep),{recursive:true});writeFileSync(join(dir,'node_modules',dep,'package.json'),JSON.stringify({name:dep}));}};
   writeRuntime(target,'old');
   await installRuntime({target,runner:async(cmd,args,options)=>{if(args[0]==='--version')return '2.1.247 (Claude Code)';installArgs=args;writeRuntime(options.cwd,'new');return '';}});
   assert.equal(installArgs[installArgs.indexOf('--no-fund')+1],'--save=false');assert.ok(installArgs.includes('--no-bin-links'));

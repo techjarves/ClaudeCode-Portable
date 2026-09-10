@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { ROOT } from '../lib/paths.mjs';
 import { readConfig, saveProfile } from '../lib/config.mjs';
 import { PROVIDERS, providerEnvironment } from '../lib/providers.mjs';
-import { executableAt, installRuntime, runtimeStatus, rollbackRuntime, run } from '../lib/runtime.mjs';
+import { executableAt, installRuntime, isStubExecutable, repairNativeBinary, runtimeStatus, rollbackRuntime, run } from '../lib/runtime.mjs';
 import { startAdapter } from '../lib/adapter.mjs';
 import { startExternalAdapter } from '../lib/external-adapter.mjs';
 import { startResponsesAdapter } from '../lib/responses-adapter.mjs';
@@ -22,7 +22,12 @@ async function main() {
     saveProfile({provider:'ollama',auth:'api',baseUrl:PROVIDERS.ollama.baseUrl,key:'',model:args[0]});
     return console.log(`Ollama profile configured for ${args[0]}. Start its server in System before launching a session.`);
   }
-  if (!executableAt()) await installRuntime({ onOutput: s => process.stdout.write(s) });
+  let executable = executableAt();
+  if (executable && isStubExecutable(executable)) {
+    process.stdout.write('Repairing the portable Claude Code native executable...\n');
+    if (!repairNativeBinary()) executable = null;
+  }
+  if (!executable) await installRuntime({ onOutput: s => process.stdout.write(s) });
   if (!command) {
     console.log('\n  CLAUDECODE-PORTABLE\n  Official Claude Code · Your choice of model\n\n  1  Open studio dashboard\n  2  Launch Claude Code terminal\n  3  Configure providers\n  4  Set up local models\n  5  Repair / update pinned runtime\n  6  Roll back runtime\n');
     const rl = createInterface({ input: process.stdin, output: process.stdout });

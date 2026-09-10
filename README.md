@@ -223,6 +223,8 @@ Git is useful for agent-driven repository operations. Alpine/musl Linux is not s
 |---|---|
 | `Cannot create symlink ... Operation not permitted` on Linux USB | Pull the latest version and start again. NTFS/link-free mode is detected automatically. |
 | `Cannot read properties of undefined (reading 'spec')` on Windows | Pull the latest version. Runtime installation now uses `--save=false`. |
+| `Error: claude native binary not installed` on a pen drive | Pull the latest version and run option 5 (repair). The installer now detects the leftover placeholder and copies the native binary without hardlinks, which FAT32/exFAT drives block. |
+| Node.js download looks stuck on Windows | Pull the latest version. `START.bat` now shows live progress with percent, MB downloaded, MB/s, and ETA, and retries interrupted downloads. |
 | `Invalid session ID` after using terminal mode on Windows | Pull the latest version. Windows Claude history paths are now parsed correctly. |
 | Runtime installation was interrupted | Run option 5 or `start.sh install`. The previous verified runtime is preserved. |
 | Dashboard says disconnected | Use the newest tokenized URL printed by the currently running launcher. |
