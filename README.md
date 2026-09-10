@@ -1,6 +1,7 @@
-# ClaudeCode-Portable — Portable AI Coding Agent
+# Claude Code Portable — One USB. Any Model.
 
-> **Run a full-featured AI coding agent from a USB drive or any folder — no global installation required.**
+> **Run Claude Code from a USB drive or any folder—no global installation required. Connect to multiple AI providers, including OpenRouter, Google Gemini, NVIDIA NIM, custom APIs, and more.**
+>
 > Plug in. Launch. Code. Take it anywhere.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
