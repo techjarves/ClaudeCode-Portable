@@ -47,13 +47,19 @@ function stubInstaller(options, seen = {}) {
 test('stub executables are detected and repaired with a plain copy', () => {
   const dir = join(temp, 'repair/current');
   writeWrapper(dir, { stub: true, native: true });
-  const exe = executableAt(dir);
-  assert.ok(exe);
-  assert.equal(isStubExecutable(exe), true);
+  const wrapper = join(dir, 'node_modules/@anthropic-ai/claude-code/bin/claude.exe');
+  assert.equal(isStubExecutable(wrapper), true);
   assert.equal(repairNativeBinary(dir), true);
-  assert.equal(readFileSync(exe, 'utf8'), 'REAL-BINARY');
-  assert.equal(isStubExecutable(exe), false);
+  assert.equal(readFileSync(wrapper, 'utf8'), 'REAL-BINARY');
+  assert.equal(isStubExecutable(wrapper), false);
   assert.equal(repairNativeBinary(dir), false, 'a healthy binary needs no repair');
+});
+
+test('runtime launches the platform-native package instead of the generic wrapper', () => {
+  const dir = join(temp, 'native/current');
+  writeWrapper(dir, { stub: false, native: true });
+  const expected = join(dir, `node_modules/@anthropic-ai/claude-code-${PLATFORM}`, process.platform === 'win32' ? 'claude.exe' : 'claude');
+  assert.equal(executableAt(dir), expected);
 });
 
 test('pen-drive install replaces the leftover stub before verifying', async () => {
