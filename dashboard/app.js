@@ -168,11 +168,11 @@ function renderSessions(){
 }
 async function refreshSessions(){const data=await api('/api/sessions');state.sessions=data.sessions;state.legacy=data.legacy;const latest=state.sessions.find(s=>s.id===state.current?.id);if(latest){Object.assign(state.current,latest);if(state.page==='studio')$('#page-title').textContent=latest.title;}renderSessions();}
 $('#session-search').oninput=renderSessions;
-function resetSession(){state.current=null;state.attachments=[];renderAttachments();state.running=false;state.followOutput=true;state.durationNote=null;state.tools.clear();state.thinking.clear();state.seenEvents.clear();requests.clear();state.streaming=null;clearWaiting();$('#transcript').replaceChildren();$('#welcome').hidden=false;$('#activity-list').innerHTML=`<div class="activity-empty"><div class="activity-empty-icon">${icon('activity')}</div><strong>A clear view of every step</strong><p>Tool calls and results appear here.<br>Answer requests in your composer.</p></div>`;$('#activity-count').textContent='0';$('#usage-details').replaceChildren();$('#prompt').disabled=false;setRunStatus('idle');updateHeader();renderSessions();}
-async function newSession(){if(state.running){toast('Stop the current turn before starting a new session.');return;}state.projectless=true;resetSession();setPage('studio');$('#prompt').focus();}
+function detachRunStream(){state.requestController?.abort();state.requestController=null;}
+function resetSession(){detachRunStream();state.current=null;state.attachments=[];renderAttachments();state.running=false;state.followOutput=true;state.durationNote=null;state.tools.clear();state.thinking.clear();state.seenEvents.clear();requests.clear();state.streaming=null;clearWaiting();$('#transcript').replaceChildren();$('#welcome').hidden=false;$('#activity-list').innerHTML=`<div class="activity-empty"><div class="activity-empty-icon">${icon('activity')}</div><strong>A clear view of every step</strong><p>Tool calls and results appear here.<br>Answer requests in your composer.</p></div>`;$('#activity-count').textContent='0';$('#usage-details').replaceChildren();$('#prompt').disabled=false;setRunStatus('idle');updateHeader();renderSessions();}
+async function newSession(){state.projectless=true;resetSession();setPage('studio');$('#prompt').focus();}
 $('#new-session').onclick=newSession;
 async function chooseWorkspace(){
-  if(state.running){toast('Stop the current turn before changing workspace.');return null;}
   const apply=async selected=>{
     const currentWorkspace=state.current?.workspace||state.workspace;
     if(selected===currentWorkspace){toast(`This chat is already working in ${shortPath(currentWorkspace)}.`);return currentWorkspace;}
@@ -298,17 +298,14 @@ function scrollConversation(force=false){
 }
 $('#conversation').addEventListener('scroll',()=>{const box=$('#conversation');state.followOutput=box.scrollHeight-box.scrollTop-box.clientHeight<=48;},{passive:true});
 async function loadSession(id,legacy=false){
-  if(state.running){
-    if(!legacy&&state.current?.id===id){setPage('studio');scrollConversation(true);return;}
-    toast('This turn is still running. Return to the highlighted chat, or stop it before opening another session.');return;
-  }
+  if(!legacy&&state.current?.id===id){setPage('studio');scrollConversation(true);return;}
   resetSession();const s=legacy?state.legacy.find(x=>x.id===id):await api(`/api/sessions/${id}`);state.current=s;state.lastRunDurationMs=Number(s.durationMs)||0;state.workspace=s.workspace||state.workspace;state.projectless=!!s.projectless;state.activePermissionMode=s.permissionMode||'default';
   if(legacy)s.messages?.forEach(m=>addMessage(m.role,typeof m.content==='string'?m.content:pretty(m.content)));
   else for(const event of s.transcript||[])renderEvent(event,true);
   if(!['running','queued','awaiting_approval'].includes(s.status))requests.clear();
   setRunStatus(s.status||'idle');updateUsage(s.usage,s.costUSD);updateHeader();renderSessions();setPage('studio');
   if(legacy){$('#prompt').disabled=true;$('#run-status').textContent='Legacy OpenClaude history · read-only. Start a new session to use Claude Code.';}
-  else if(['running','queued','awaiting_approval'].includes(s.status))consumeRun(`/api/sessions/${id}/events`,null).catch(e=>toast(e.message));
+  else if(['running','queued','awaiting_approval'].includes(s.status))consumeRun(`/api/sessions/${id}/events`,null,id).catch(e=>toast(e.message));
 }
 const statusNames={idle:'Ready when you are',queued:'Queued',running:'Agent is working',awaiting_approval:'Your approval is needed',completed:'Turn completed',failed:'Something needs attention',cancelled:'Turn cancelled',interrupted:'Session interrupted'};
 function showWaiting(status){
@@ -357,7 +354,8 @@ function updateUsage(usage,cost){
   const lines=[];if(usage?.input_tokens!==undefined)lines.push(['Input tokens',usage.input_tokens.toLocaleString()]);if(usage?.output_tokens!==undefined)lines.push(['Output tokens',usage.output_tokens.toLocaleString()]);
   if(typeof cost==='number')lines.push(['Runtime cost estimate',`$${cost.toFixed(4)}`]);$('#usage-details').innerHTML=lines.map(([k,v])=>`<div class="usage-line"><span>${escape(k)}</span><span>${escape(v)}</span></div>`).join('');
 }
-function renderEvent(event,replay=false){
+function renderEvent(event,replay=false,sessionId=state.current?.id){
+  if(sessionId&&state.current?.id!==sessionId)return;
   if(event.eventId&&event.type!=='delta'){if(state.seenEvents.has(event.eventId))return;state.seenEvents.add(event.eventId);}
   if(event.type==='status')setRunStatus(event.status);
   if(event.type==='delta'){
@@ -401,16 +399,17 @@ function renderEvent(event,replay=false){
   if(event.type==='end'){setRunStatus(event.status,$('#run-status').classList.contains('error')?$('#run-status').textContent:undefined);state.streaming?.classList.remove('streaming');state.streaming=null;refreshSessions().catch(()=>{});}
   normalizeAssistantHeaders();
 }
-async function consumeRun(path,body){
-  state.requestController=new AbortController();setRunStatus('queued');
+async function consumeRun(path,body,sessionId=state.current?.id){
+  const controller=new AbortController();state.requestController=controller;
+  if(body&&state.current?.id===sessionId)setRunStatus('queued');
   try{
-    const res=await fetch(path,{method:body?'POST':'GET',headers:{'X-Portable-Token':token,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),signal:state.requestController.signal});
+    const res=await fetch(path,{method:body?'POST':'GET',headers:{'X-Portable-Token':token,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),signal:controller.signal});
     if(!res.ok){const err=await res.json();throw new Error(err.error||'Could not start the agent');}
     const reader=res.body.getReader(),decoder=new TextDecoder();let buffer='';
-    while(true){const {done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let n;while((n=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,n);buffer=buffer.slice(n+2);const data=frame.split('\n').filter(l=>l.startsWith('data:')).map(l=>l.slice(5).trim()).join('\n');if(data)renderEvent(JSON.parse(data));}}
-    if(state.running)setRunStatus('interrupted','Connection ended. Reopen this session to reconnect.');
-  }catch(e){if(e.name!=='AbortError')setRunStatus('failed',e.message);}
-  finally{state.requestController=null;await refreshSessions().catch(()=>{});}
+    while(true){const {done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let n;while((n=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,n);buffer=buffer.slice(n+2);const data=frame.split('\n').filter(l=>l.startsWith('data:')).map(l=>l.slice(5).trim()).join('\n');if(data)renderEvent(JSON.parse(data),false,sessionId);}}
+    if(state.current?.id===sessionId&&state.running)setRunStatus('interrupted','Connection ended. Reopen this session to reconnect.');
+  }catch(e){if(e.name!=='AbortError'&&state.current?.id===sessionId)setRunStatus('failed',e.message);}
+  finally{if(state.requestController===controller)state.requestController=null;await refreshSessions().catch(()=>{});}
 }
 $('#composer').onsubmit=async e=>{
   e.preventDefault();if(requests.active){await requests.submit();return;}if(state.running)return;const written=$('#prompt').value.trim();if(!written&&!state.attachments.length)return;
@@ -419,7 +418,8 @@ $('#composer').onsubmit=async e=>{
     const uploaded=state.attachments.length?await uploadAttachments():[];
     const prompt=written||'Please inspect the attached files and help me continue this project.';
     state.attachments=[];renderAttachments();state.followOutput=true;$('#prompt').value='';$('#prompt').style.height='';setPage('studio');state.activePermissionMode=state.permissionMode;scrollConversation(true);
-    await consumeRun(`/api/sessions/${state.current.id}/run`,{prompt,attachments:uploaded.map(file=>file.id),permissionMode:state.permissionMode,...(state.permissionMode==='bypassPermissions'?{confirmation:'UNRESTRICTED'}:{})});
+    const sessionId=state.current.id;
+    await consumeRun(`/api/sessions/${sessionId}/run`,{prompt,attachments:uploaded.map(file=>file.id),permissionMode:state.permissionMode,...(state.permissionMode==='bypassPermissions'?{confirmation:'UNRESTRICTED'}:{})},sessionId);
   }catch(err){toast(err.message);}
 };
 $('#prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();$('#composer').requestSubmit();}});
