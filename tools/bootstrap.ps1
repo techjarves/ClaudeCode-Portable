@@ -116,5 +116,6 @@ if ($NeedsNode) {
     if ($Installed -ne "v$Version") { throw "Portable Node.js verification failed (got '$Installed')" }
     Write-Host "Portable Node.js $Installed ready." -ForegroundColor Green
 }
+$env:PATH = "$NodeDir;$env:PATH"
 & $NodeExe (Join-Path $ProjectRoot 'tools/launcher.mjs') @args
 exit $LASTEXITCODE
