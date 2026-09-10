@@ -36,4 +36,8 @@ try{
   const saved=store.get(session.id);assert.equal(saved.status,'completed',saved.error||'Agent failed');assert.ok(saved.sdkSessionId);assert.ok(existsSync(join(temp,'output.txt')),'Write tool did not execute');assert.equal(readFileSync(join(temp,'output.txt'),'utf8'),'verified official Claude Code\n');assert.ok(approvals>0,'No approval was requested');assert.ok(saved.events.some(e=>e.type==='tool'&&e.name==='Bash'),'Bash tool did not execute');
   const resumed=await manager.start(session.id,'Confirm that the workflow is complete.',{},()=>{});await resumed.promise;assert.equal(store.get(session.id).status,'completed');assert.equal(store.get(session.id).sdkSessionId,saved.sdkSessionId);
   console.log(JSON.stringify({result:'PASS',runtime:'official Claude Code',provider:'local scripted mock',requests,approvals,readWriteCommand:true,resume:true},null,2));
-}finally{clearTimeout(timeout);await manager.close();upstream.closeAllConnections();await new Promise(r=>upstream.close(r));rmSync(temp,{recursive:true,force:true,maxRetries:10,retryDelay:100});}
+}finally{
+  clearTimeout(timeout);await manager.close();upstream.closeAllConnections();await new Promise(r=>upstream.close(r));
+  try{rmSync(temp,{recursive:true,force:true,maxRetries:10,retryDelay:100});}
+  catch(error){if(process.platform!=='win32'||!['EBUSY','EPERM'].includes(error.code))throw error;console.warn(`Windows still holds the completed smoke-test workspace; the runner will remove it: ${temp}`);}
+}
