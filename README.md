@@ -4,6 +4,20 @@ A portable launcher and independent browser workspace powered by **official Anth
 
 The studio has graphite/teal dark and light themes, a resizable/collapsible project sidebar, grouped session search, streaming Markdown and highlighted code, a compact chronological tool timeline, explicit approvals, cancellation, session resume, attachments, local-model controls, and runtime diagnostics. The composer starts at two lines, grows to five, then scrolls. Below 1280px the inspector becomes a drawer; below 768px navigation does too.
 
+## Screenshots
+
+### Studio dashboard
+
+![Portable AI Studio dashboard](docs/images/studio-dashboard.png)
+
+### Provider settings
+
+![Portable AI provider settings](docs/images/provider-settings.png)
+
+### Official Claude Code terminal
+
+![Official Claude Code terminal resume screen](docs/images/claude-code-terminal.png)
+
 ## Start here
 
 From this folder on macOS / Linux:
