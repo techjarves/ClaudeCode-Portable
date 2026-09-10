@@ -177,7 +177,7 @@ Local inference needs enough RAM/VRAM, a useful context window, and a model capa
 
 | Component | Pinned Version |
 |---|---|
-| **Node.js** | `22.23.2` |
+| **Node.js** | `24.21.0` |
 | **Claude Code** | `2.1.247` |
 | **Claude Agent SDK** | `0.3.247` |
 | **claude-adapter** | `2.2.1` |

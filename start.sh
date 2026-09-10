@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
-NODE_VERSION="22.23.2"
+NODE_VERSION="24.21.0"
 case "$(uname -s)" in Darwin) PLATFORM=darwin;; Linux) PLATFORM=linux;; *) echo "Unsupported operating system"; exit 1;; esac
 case "$(uname -m)" in arm64|aarch64) ARCH=arm64;; x86_64|amd64) ARCH=x64;; *) echo "Unsupported CPU architecture"; exit 1;; esac
 NODE_DIR="$PROJECT_ROOT/engine/node-$PLATFORM-$ARCH"

@@ -4,7 +4,7 @@ $ProgressPreference = 'SilentlyContinue'
 # streaming downloader below (PowerShell 7+ already has it; harmless there).
 Add-Type -AssemblyName System.Net.Http
 $ProjectRoot = Split-Path $PSScriptRoot -Parent
-$Version = '22.23.2'
+$Version = '24.21.0'
 $Arch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -eq 'Arm64') { 'arm64' } else { 'x64' }
 $NodeDir = Join-Path $ProjectRoot "engine/node-win32-$Arch"
 $NodeExe = Join-Path $NodeDir 'node.exe'
