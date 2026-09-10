@@ -65,7 +65,7 @@ test('verified runtime replacement retains the old copy and rollback restores it
   const writeRuntime=(dir,tag)=>{mkdirSync(join(dir,'node_modules/@anthropic-ai/claude-code/bin'),{recursive:true});writeFileSync(join(dir,'node_modules/@anthropic-ai/claude-code/package.json'),JSON.stringify({bin:{claude:'bin/claude.exe'}}));writeFileSync(join(dir,'node_modules/@anthropic-ai/claude-code/bin/claude.exe'),tag);};
   writeRuntime(target,'old');
   await installRuntime({target,runner:async(cmd,args,options)=>{if(args[0]==='--version')return '2.1.247 (Claude Code)';installArgs=args;writeRuntime(options.cwd,'new');return '';}});
-  assert.equal(installArgs[installArgs.indexOf('--no-fund')+1],'--save=false');
+  assert.equal(installArgs[installArgs.indexOf('--no-fund')+1],'--save=false');assert.ok(installArgs.includes('--no-bin-links'));
   const exe='node_modules/@anthropic-ai/claude-code/bin/claude.exe';assert.equal(readFileSync(join(target,exe),'utf8'),'new');
   await rollbackRuntime({target,runner:async()=> '2.1.247 (Claude Code)'});assert.equal(readFileSync(join(target,exe),'utf8'),'old');
 });

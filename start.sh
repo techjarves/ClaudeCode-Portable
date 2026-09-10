@@ -18,7 +18,14 @@ if [ ! -x "$NODE_BIN" ] || [ "$("$NODE_BIN" --version 2>/dev/null || true)" != "
   if [ -z "$EXPECTED" ] || [ "$EXPECTED" != "$ACTUAL" ]; then echo "Node.js checksum verification failed"; exit 1; fi
   STAGING="$(mktemp -d "$PROJECT_ROOT/engine/node-extract.XXXXXX")"
   trap 'rm -rf "$STAGING"' EXIT
-  tar -xzf "$ARCHIVE" -C "$STAGING" --strip-components=1
+  if ln -s portable-symlink-test "$STAGING/.portable-symlink-test" 2>/dev/null; then
+    rm "$STAGING/.portable-symlink-test"
+    tar -xzf "$ARCHIVE" -C "$STAGING" --strip-components=1
+  else
+    echo "This drive does not support symbolic links; using the NTFS-compatible Node.js layout…"
+    tar -xzf "$ARCHIVE" -C "$STAGING" --strip-components=1 \
+      --exclude='*/bin/npm' --exclude='*/bin/npx' --exclude='*/bin/corepack'
+  fi
   "$STAGING/bin/node" --version
   if [ -d "$NODE_DIR" ]; then mv "$NODE_DIR" "$NODE_DIR.incomplete.$(date +%s)"; fi
   mv "$STAGING" "$NODE_DIR"
