@@ -60,9 +60,14 @@ test('native workspace picker validates the selected directory and handles cance
   assert.equal(invocation.options.env.PORTABLE_AI_WORKSPACE_PICKER_INITIAL,realpathSync(temp));
 });
 test('failed runtime installation preserves the working copy',async()=>{
-  const target=join(temp,'runtime/current');mkdirSync(target,{recursive:true});writeFileSync(join(target,'keep.txt'),'working');
-  await assert.rejects(installRuntime({target,runner:async()=>{throw new Error('simulated install failure');}}),/simulated/);
+  const target=join(temp,'runtime/current');let staging;mkdirSync(target,{recursive:true});writeFileSync(join(target,'keep.txt'),'working');
+  await assert.rejects(installRuntime({target,runner:async(_cmd,_args,options)=>{staging=options.cwd;writeFileSync(join(staging,'downloaded-part'),'reusable');throw new Error('simulated install failure');}}),/preserved for the next attempt.*runtime-install\.log/s);
   assert.equal(readFileSync(join(target,'keep.txt'),'utf8'),'working');assert.equal(existsSync(join(temp,'runtime/install.lock')),false);
+  assert.equal(readFileSync(join(staging,'downloaded-part'),'utf8'),'reusable');
+  assert.match(readFileSync(join(temp,'data/logs/runtime-install.log'),'utf8'),/INSTALL FAILED[\s\S]*simulated install failure/);
+  const retryOutput=[];
+  await assert.rejects(installRuntime({target,onOutput:text=>retryOutput.push(text),runner:async(_cmd,_args,options)=>{assert.equal(readFileSync(join(options.cwd,'downloaded-part'),'utf8'),'reusable');throw new Error('retry fixture');}}),/retry fixture/);
+  assert.match(retryOutput.join(''),/Resuming the previous incomplete installation/);
 });
 test('verified runtime replacement retains the old copy and rollback restores it',async()=>{
   const target=join(temp,'transaction/current');let installArgs;
