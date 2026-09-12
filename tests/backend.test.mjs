@@ -54,6 +54,10 @@ test('native workspace picker validates the selected directory and handles cance
   assert.equal(await pickWorkspace(temp,{platform:'darwin',runner:async(command,args)=>{invocation={command,args};return `${temp}\n`;}}),realpathSync(temp));
   assert.equal(invocation.command,'/usr/bin/osascript');assert.equal(invocation.args.at(-1),realpathSync(temp));
   assert.equal(await pickWorkspace(temp,{platform:'darwin',runner:async()=>{throw Object.assign(new Error('User canceled.'),{code:1});}}),null);
+  assert.equal(await pickWorkspace(temp,{platform:'win32',runner:async(command,args,options)=>{invocation={command,args,options};return temp;}}),realpathSync(temp));
+  assert.equal(invocation.command,'powershell.exe');assert.equal(invocation.args.at(-2),'-Command');
+  assert.match(invocation.args.at(-1),/ShowDialog\(\$owner\)/);assert.equal(invocation.args.includes(temp),false);
+  assert.equal(invocation.options.env.PORTABLE_AI_WORKSPACE_PICKER_INITIAL,realpathSync(temp));
 });
 test('failed runtime installation preserves the working copy',async()=>{
   const target=join(temp,'runtime/current');mkdirSync(target,{recursive:true});writeFileSync(join(target,'keep.txt'),'working');
