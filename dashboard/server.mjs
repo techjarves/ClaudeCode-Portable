@@ -21,7 +21,7 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
   mkdirSync(LOGS,{recursive:true});
   let origin; let maintenance=false; let restartRequired=false; const pulls=new Set();
   const staticFiles={
-    '/':'dashboard/index.html','/app.js':'dashboard/app.js','/requests.js':'dashboard/requests.js','/styles.css':'dashboard/styles.css','/icons.js':'dashboard/icons.js',
+    '/':'dashboard/index.html','/app.js':'dashboard/app.js','/composer.js':'dashboard/composer.js','/requests.js':'dashboard/requests.js','/styles.css':'dashboard/styles.css','/icons.js':'dashboard/icons.js',
     '/vendor/marked.js':join(RUNTIME,'node_modules/marked/lib/marked.esm.js'),
     '/vendor/purify.js':join(RUNTIME,'node_modules/dompurify/dist/purify.es.mjs'),
     '/vendor/highlight.js':join(RUNTIME,'node_modules/@highlightjs/cdn-assets/es/highlight.min.js')

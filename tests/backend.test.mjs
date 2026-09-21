@@ -87,6 +87,7 @@ test('dashboard blocks unauthenticated, cross-origin and rebinding requests',asy
   const keyResponse=await fetch(`${app.origin}/api/config/key?provider=custom`,{headers:{'X-Portable-Token':app.token}});assert.equal(keyResponse.status,200);assert.deepEqual(await keyResponse.json(),{key:'test-secret-not-real'});
   const switched=await fetch(`${app.origin}/api/config/active`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({provider:'openrouter'})});assert.equal(switched.status,200);assert.equal((await switched.json()).active,'openrouter');activateProfile('custom');
   const page=await fetch(app.origin);assert.match(page.headers.get('content-security-policy'),/frame-ancestors 'none'/);
+  const composerScript=await fetch(`${app.origin}/composer.js`);assert.equal(composerScript.status,200);assert.match(await composerScript.text(),/isComposerSubmitKey/);
   assert.equal((await fetch(`${app.origin}/data/settings.json`)).status,404);
   assert.equal((await fetch(`${app.origin}/api/config`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'text/plain'},body:'{}'})).status,415);
   const picked=await fetch(`${app.origin}/api/workspace/pick`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({initial:'/ignored'})});
