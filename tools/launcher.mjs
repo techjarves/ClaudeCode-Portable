@@ -56,7 +56,7 @@ async function main() {
     if (!process.stdin.isTTY) throw new Error('Configure a provider in the dashboard first');
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     const answer = await rl.question('No provider configured. Use official Claude account login? [y/N] '); rl.close();
-    if (answer.toLowerCase() !== 'y') throw new Error('Run the dashboard to configure any of the nine providers');
+    if (answer.toLowerCase() !== 'y') throw new Error('Run the dashboard to configure any of the ten providers');
     saveProfile({ provider:'anthropic', auth:'login', model:'sonnet', baseUrl: PROVIDERS.anthropic.baseUrl });
     config = readConfig(); profile = config.profiles[config.active];
   }

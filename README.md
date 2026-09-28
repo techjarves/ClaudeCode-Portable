@@ -32,7 +32,7 @@
 
 ## What Is This?
 
-**ClaudeCode-Portable** is a fully portable AI coding workspace powered by the **official Anthropic Claude Code runtime and Agent SDK**. It bundles a self-contained Node.js runtime, nine provider configurations, a real Claude Code terminal, and a premium browser dashboard — all launched from `START.bat` on Windows or `start.sh` on Linux/macOS.
+**ClaudeCode-Portable** is a fully portable AI coding workspace powered by the **official Anthropic Claude Code runtime and Agent SDK**. It bundles a self-contained Node.js runtime, ten provider configurations, a real Claude Code terminal, and a premium browser dashboard — all launched from `START.bat` on Windows or `start.sh` on Linux/macOS.
 
 App-owned runtimes, provider settings, chat history, attachments, caches, and logs stay inside the project folder. Each operating system downloads its compatible runtime once and reuses it from the USB drive.
 
@@ -43,7 +43,7 @@ App-owned runtimes, provider settings, chat history, attachments, caches, and lo
 | Feature | Details |
 |---|---|
 | **Official Claude Code** | Uses Anthropic's official CLI and Agent SDK — no replacement agent engine |
-| **9 AI Providers** | NVIDIA NIM · DeepSeek · OpenRouter · Google Gemini · Anthropic · OpenAI · Ollama · LM Studio · Custom API |
+| **10 AI Providers** | NVIDIA NIM · DeepSeek · OpenRouter · Requesty · Google Gemini · Anthropic · OpenAI · Ollama · LM Studio · Custom API |
 | **Portable Runtime** | Node.js, Claude Code, caches, settings, and app data stay in the project folder |
 | **Studio Dashboard** | Streaming chat, Markdown, code highlighting, compact tool steps, approvals, attachments, and diagnostics |
 | **Shared Claude History** | GUI and portable terminal sessions use real Claude Code conversation IDs and can resume the same history |
@@ -124,12 +124,15 @@ Pressing Enter selects the dashboard.
 | **NVIDIA NIM** | Chat Completions adapter | [build.nvidia.com](https://build.nvidia.com) |
 | **DeepSeek** | Anthropic-compatible API | [platform.deepseek.com](https://platform.deepseek.com) |
 | **OpenRouter** | Anthropic-compatible API | [openrouter.ai](https://openrouter.ai) |
+| **Requesty** | Anthropic-compatible API | [app.requesty.ai](https://app.requesty.ai/api-keys) |
 | **Google Gemini** | Chat Completions adapter | [aistudio.google.com](https://aistudio.google.com) |
 | **Anthropic Claude** | Native Messages API / terminal login | [console.anthropic.com](https://console.anthropic.com) |
 | **OpenAI** | Chat Completions adapter | [platform.openai.com](https://platform.openai.com) |
 | **Ollama** | Local Anthropic-compatible endpoint | [ollama.com](https://ollama.com) |
 | **LM Studio** | Local Anthropic-compatible endpoint | [lmstudio.ai](https://lmstudio.ai) |
 | **Custom API** | Chat Completions or Responses API | Provider base URL + optional API key |
+
+Requesty uses `https://router.requesty.ai` by default. Set the base URL to `https://router.eu.requesty.ai` to use its EU endpoint.
 
 > **Non-Claude models are experimental and are not supported by Anthropic.** Tool calling, images, context limits, resume behavior, and other Claude Code features depend on the selected model and provider.
 
