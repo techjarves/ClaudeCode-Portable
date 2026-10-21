@@ -446,11 +446,11 @@ function renderProviders(){
   $$('[data-provider]').forEach(b=>b.onclick=()=>selectProvider(b.dataset.provider));
 }
 function selectProvider(id){
-  state.selectedProvider=id;state.models=[];const p=state.providers[id];if(!p)return;const saved=state.config.profiles[id];
+  state.selectedProvider=id;const p=state.providers[id];if(!p)return;state.models=p.models||[];const saved=state.config.profiles[id];
   renderProviders();$('#provider-title').textContent=p.name;$('#transport-tag').textContent=p.transport==='anthropic'?'Direct Messages API':'Local compatibility adapter';
-  $('#provider-note').textContent=id==='anthropic'?'Use an API key in the studio, or choose account login for terminal sessions.':p.transport==='openai'?'The official agent connects through a local protocol adapter. Extended thinking and provider-specific server tools are not supported.':'This provider exposes an Anthropic-compatible endpoint. Non-Claude model capabilities vary.';
+  $('#provider-note').textContent=id==='anthropic'?'Use an API key in the studio, or choose account login for terminal sessions.':id==='minimax'?'Flash and M3 use adaptive thinking with the built-in adapter. Saved and manually entered model IDs remain available.':p.transport==='openai'?'The official agent connects through a local protocol adapter. Extended thinking and provider-specific server tools are not supported.':'This provider exposes an Anthropic-compatible endpoint. Non-Claude model capabilities vary.';
   $('#base-url').value=saved?.baseUrl||p.baseUrl;$('#api-key').value='';setApiKeyVisibility(false);$('#api-key').placeholder=saved?.hasKey?'Credential saved · leave blank to keep':'Enter your provider API key';$('#key-saved').textContent=saved?.hasKey?'· saved':'';
-  $('#model-name').value=saved?.model||p.defaultModel||'';$('#context-window').value=saved?.contextWindow||'';$('#auth').value=saved?.auth||'api';$('#auth-field').hidden=id!=='anthropic';$('#model-results').hidden=true;formMessage('#provider-message','');updateAuthField();updateAdapterFields(true);
+  $('#model-name').value=saved?.model||p.defaultModel||'';$('#context-window').value=saved?.contextWindow||'';$('#auth').value=saved?.auth||'api';$('#auth-field').hidden=id!=='anthropic';renderModels();formMessage('#provider-message','');updateAuthField();updateAdapterFields(true);
 }
 function updateAdapterFields(loadSaved=false){
   const p=state.providers[state.selectedProvider];const saved=state.config.profiles[state.selectedProvider];

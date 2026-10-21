@@ -73,7 +73,7 @@ async function main() {
   const useAdapter = PROVIDERS[profile.provider].transport === 'openai';
   const adapter = !useAdapter ? null : profile.adapter === 'external' ? await startExternalAdapter(profile) : profile.adapter === 'responses' ? await startResponsesAdapter(profile) : await startAdapter(profile);
   const env = providerEnvironment(profile, { adapter });
-  if (adapter) env.MAX_THINKING_TOKENS = '0';
+  if (adapter && !(profile.provider==='minimax'&&(!profile.adapter||profile.adapter==='builtin')&&['MiniMax-M3.1-Flash','MiniMax-M3'].includes(profile.model))) env.MAX_THINKING_TOKENS = '0';
   console.log(`\nOfficial Claude Code → ${PROVIDERS[profile.provider].name} / ${profile.model}${useAdapter && profile.adapter === 'external' ? ` · external adapter (${profile.toolFormat || 'native'})` : useAdapter && profile.adapter === 'responses' ? ' · Responses API adapter' : ''}\nNon-Claude models have provider-dependent feature compatibility.\n`);
   try { await run(executableAt(), ['--model',profile.model,...args], { stdio:'inherit', env, cwd: process.cwd() }); }
   finally { await adapter?.close(); }
