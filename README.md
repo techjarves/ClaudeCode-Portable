@@ -50,6 +50,7 @@ App-owned runtimes, provider settings, chat history, attachments, caches, and lo
 | **Project + Normal Chats** | Work inside a selected folder or start an agent conversation without attaching a project |
 | **Provider Switching** | Switch directly between configured provider/model profiles from the composer |
 | **Three Adapter Modes** | Built-in, external `claude-adapter`, and OpenAI Responses API support |
+| **Bounded AutoDev** | Persistent Claude/Codex work packages, owned worktrees, reciprocal review, approval-gated integration, and observed validation |
 | **Cross-Platform** | Windows, Linux, and macOS runtimes can coexist on the same portable drive |
 
 ---
@@ -142,6 +143,31 @@ OpenAI-compatible providers can use:
 - **Responses API** — `/responses` support with incremental text and tool-argument streaming
 
 All adapters bind only to `127.0.0.1` and use a fresh local token for every run.
+
+---
+
+## Autonomous Multi-Agent Development
+
+The dashboard includes a bounded AutoDev lifecycle:
+
+```text
+PLAN → DELEGATE → IMPLEMENT → TEST → REVIEW → FIX → INTEGRATE → VALIDATE → REPORT
+```
+
+Commands entered in the composer:
+
+- `/auto-dev <request>` — plan and implement a repository change.
+- `/multi-review <request>` — run reciprocal read-only review.
+- `/deep-review <request>` — run broader correctness and security review.
+- `/agent-status` — report persisted run status without invoking a model.
+
+Writable packages receive separate application-owned Git worktrees. Independent, non-overlapping packages run concurrently up to the configured limit (three by default). Claude-produced work must be reviewed by Codex and Codex-produced work by Claude. Worker test claims are advisory; required gates are executed and observed by the host. Repairs are bounded, committed, retested, and rereviewed. Verified packages are merged and fully validated first in a disposable staging worktree, then integrated only after an exact digest-bound approval and destination-state checks.
+
+AutoDev is repository-scoped. Selecting another Git repository creates a separate manager, ledger namespace, and worktree namespace. Interrupted runs can be resumed from the run inspector; owned worktrees are adopted only when their ownership record, registered path, and branch all match. The dashboard limits active runs globally, paginates status lists, bounds event replay, and reconnects interrupted streams from the last sequence.
+
+Codex is optional. To enable delegated Codex work, install the official `codex` CLI and save an OpenAI API credential in the OpenAI provider profile. The key is supplied only to each Codex process and excluded from model-generated child-shell environments. Writable Codex invocations use a private fail-closed command policy while host code owns commits, tests, integration, and publication. Source code assigned to Codex is sent to OpenAI, so use it only where that transmission is authorized.
+
+See [architecture](docs/multi-agent-architecture.md), [security](docs/multi-agent-security.md), [operations](docs/multi-agent-operations.md), and the [test report](docs/multi-agent-test-report.md).
 
 ---
 
