@@ -7,6 +7,8 @@
     "start": "node tools/launcher.mjs dashboard",
     "setup": "node tools/launcher.mjs install",
     "test": "node --test tests/*.test.mjs",
+    "test:autodev": "node --test tests/autodev-*.test.mjs",
+    "test:autodev:real": "node tests/autodev-real-e2e.mjs",
     "check": "node tools/check.mjs",
     "smoke": "node tests/runtime-smoke.mjs"
   },
