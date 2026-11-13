@@ -156,7 +156,7 @@ function updateHeader(){
 function renderSessions(){
   const search=$('#session-search').value.toLowerCase(),sessions=[...state.sessions,...state.legacy].filter(s=>s.title.toLowerCase().includes(search));$('#session-count').textContent=state.sessions.length;
   const age=value=>{const seconds=Math.max(0,(Date.now()-new Date(value||0))/1000);return seconds<60?'now':seconds<3600?`${Math.floor(seconds/60)}m`:seconds<86400?`${Math.floor(seconds/3600)}h`:seconds<604800?`${Math.floor(seconds/86400)}d`:`${Math.floor(seconds/604800)}w`;};
-  const row=s=>`<div class="session-row ${state.current?.id===s.id?'current':''}"><button class="session-select" data-session="${escape(s.id)}" ${s.legacy?'data-legacy="true"':''} title="${escape(s.title)}"><span>${escape(s.title)}</span><time>${age(s.updated||s.created)}</time></button>${!s.legacy&&!s.nativeConversation?`<button class="icon-btn delete-session" data-delete="${escape(s.id)}" aria-label="Delete ${escape(s.title)}">${icon('trash')}</button>`:''}</div>`;
+  const row=s=>`<div class="session-row ${state.current?.id===s.id?'current':''}"><button class="session-select" data-session="${escape(s.id)}" ${s.legacy?'data-legacy="true"':''} title="${escape(s.title)}"><span>${escape(s.title)}</span><time>${age(s.updated||s.created)}</time></button><button class="icon-btn delete-session" data-delete="${escape(s.id)}" aria-label="Delete ${escape(s.title)}">${icon('trash')}</button></div>`;
   const recent=sessions.filter(s=>s.projectless||s.legacy),projects=new Map();for(const s of sessions.filter(s=>!s.projectless&&!s.legacy)){const key=s.workspace||'Unknown project';if(!projects.has(key))projects.set(key,[]);projects.get(key).push(s);}
   let html='';
   for(const [workspace,items] of projects){
