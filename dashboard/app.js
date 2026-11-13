@@ -120,6 +120,7 @@ function setPage(page){state.page=page;$$('.view').forEach(el=>el.hidden=el.id!=
 $$('[data-page]').forEach(el=>el.onclick=()=>setPage(el.dataset.page));$('.brand').addEventListener('click',e=>{if(e.target.closest('button'))return;e.preventDefault();setPage('studio');});
 $('#settings-launch').onclick=()=>setPage(state.page==='settings'?'studio':'settings');$('#settings-theme').onclick=toggleTheme;$('#theme-toggle').onclick=toggleTheme;
 $('#settings-providers').onclick=()=>setPage('providers');$('#settings-system').onclick=()=>setPage('system');$('#connection').onclick=()=>setPage('providers');
+$('#delete-conversation').onclick=()=>{if(state.current)deleteConversation(state.current.id);};
 $$('[data-back-settings]').forEach(button=>button.onclick=()=>setPage('settings'));
 function selectableProfiles(){return Object.entries(state.config.profiles||{}).filter(([id,p])=>state.providers[id]&&p.auth!=='login');}
 function renderModelSwitcher(){
@@ -150,6 +151,7 @@ function updateHeader(){
   $$('[data-permission]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.permission===state.permissionMode)));
   $('.composer-foot>span:first-child').innerHTML=icon(danger?'alert':'shield')+(state.running&&mode!==state.permissionMode?`Current turn: ${permissionNames[mode]}. Next: ${permissionNames[state.permissionMode]}.`:danger?'Unrestricted mode. Actions run without approval.':mode==='acceptEdits'?'File edits allowed. Other permission checks remain on.':'You stay in control. Approvals are on.');
   $('#settings-version').textContent=state.runtime.version||'Not installed';$('#health-runtime').textContent=state.runtime.installed?'Ready':'Not installed';renderModelSwitcher();renderContextMeter();
+  $('#delete-conversation').hidden=!state.current;
 }
 function renderSessions(){
   const search=$('#session-search').value.toLowerCase(),sessions=[...state.sessions,...state.legacy].filter(s=>s.title.toLowerCase().includes(search));$('#session-count').textContent=state.sessions.length;
@@ -165,9 +167,13 @@ function renderSessions(){
   $('#session-list').innerHTML=html||`<p class="sidebar-empty">${search?'No matching conversations.':'Start a normal chat or open a project folder.'}</p>`;
   $$('[data-session]').forEach(b=>b.onclick=()=>loadSession(b.dataset.session,!!b.dataset.legacy).catch(e=>toast(e.message)));
   $$('[data-project-toggle]').forEach(b=>b.onclick=()=>{const workspace=b.dataset.projectToggle;if(state.expandedProjects.has(workspace))state.expandedProjects.delete(workspace);else state.expandedProjects.add(workspace);renderSessions();});
-  $$('[data-delete]').forEach(b=>b.onclick=async()=>{if(!await confirmAction('Delete session?','This removes its dashboard transcript. Runtime session files are retained.','Delete'))return;try{await api(`/api/sessions/${b.dataset.delete}`,null,'DELETE');if(state.current?.id===b.dataset.delete)resetSession();await refreshSessions();}catch(e){toast(e.message);}});
+  $$('[data-delete]').forEach(b=>b.onclick=()=>deleteConversation(b.dataset.delete));
 }
 async function refreshSessions(){const data=await api('/api/sessions');state.sessions=data.sessions;state.legacy=data.legacy;const latest=state.sessions.find(s=>s.id===state.current?.id);if(latest){Object.assign(state.current,latest);if(state.page==='studio')$('#page-title').textContent=latest.title;}renderSessions();}
+async function deleteConversation(id){
+  if(!await confirmAction('Delete conversation?','This permanently removes the conversation and its Claude Code history.','Delete'))return;
+  try{await api(`/api/sessions/${encodeURIComponent(id)}`,null,'DELETE');if(state.current?.id===id)resetSession();await refreshSessions();toast('Conversation deleted.');}catch(e){toast(e.message);}
+}
 $('#session-search').oninput=renderSessions;
 function detachRunStream(){state.requestController?.abort();state.requestController=null;}
 function resetSession(){detachRunStream();state.current=null;state.attachments=[];renderAttachments();state.running=false;state.followOutput=true;state.durationNote=null;state.tools.clear();state.thinking.clear();state.seenEvents.clear();requests.clear();state.streaming=null;clearWaiting();$('#transcript').replaceChildren();$('#welcome').hidden=false;$('#activity-list').innerHTML=`<div class="activity-empty"><div class="activity-empty-icon">${icon('activity')}</div><strong>A clear view of every step</strong><p>Tool calls and results appear here.<br>Answer requests in your composer.</p></div>`;$('#activity-count').textContent='0';$('#usage-details').replaceChildren();$('#prompt').disabled=false;setRunStatus('idle');updateHeader();renderSessions();}

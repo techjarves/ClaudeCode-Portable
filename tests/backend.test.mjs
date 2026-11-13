@@ -13,7 +13,7 @@ const { startDashboard }=await import('../dashboard/server.mjs');
 const { installRuntime,rollbackRuntime,manifest }=await import('../lib/runtime.mjs');
 const { sessionTranscript }=await import('../lib/transcript.mjs');
 const { pickWorkspace }=await import('../lib/workspace-picker.mjs');
-const { nativeSessionId }=await import('../lib/native-sessions.mjs');
+const { nativeSessionId, removeNativeSession }=await import('../lib/native-sessions.mjs');
 test.after(()=>rmSync(temp,{recursive:true,force:true}));
 const profile={provider:'custom',model:'test-model',auth:'api',baseUrl:'http://127.0.0.1:9099/v1',key:'test-secret-not-real'};
 test('all nine providers and safe configuration round trips',()=>{
@@ -113,6 +113,12 @@ test('dashboard blocks unauthenticated, cross-origin and rebinding requests',asy
   const created=await fetch(`${app.origin}/api/sessions`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({workspace:temp,trusted:true})});const session=await created.json();assert.equal(created.status,201);
   const upload=await fetch(`${app.origin}/api/sessions/${session.id}/attachments`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({files:[{name:'screen.png',type:'image/png',data:Buffer.from('image fixture').toString('base64')}]})});const uploaded=await upload.json();assert.equal(upload.status,201);assert.equal(uploaded.attachments[0].name,'screen.png');
   assert.equal((await fetch(`${app.origin}/api/sessions/${session.id}`,{method:'DELETE',headers:{'X-Portable-Token':app.token}})).status,200);
+  assert.equal((await fetch(`${app.origin}/api/sessions/${session.id}`,{headers:{'X-Portable-Token':app.token}})).status,404);
+  const chats=join(process.env.PORTABLE_AI_DATA_DIR,'chats');mkdirSync(chats,{recursive:true});writeFileSync(join(chats,'legacy-one.json'),JSON.stringify({title:'Legacy one',messages:[]}));
+  assert.equal((await fetch(`${app.origin}/api/sessions/legacy-one`,{method:'DELETE',headers:{'X-Portable-Token':app.token}})).status,200);
+  assert.equal(existsSync(join(chats,'legacy-one.json')),false);
+  assert.equal((await fetch(`${app.origin}/api/sessions/legacy-one`,{method:'DELETE',headers:{'X-Portable-Token':app.token}})).status,404);
+  assert.equal((await fetch(`${app.origin}/api/sessions/..%2Fsettings`,{method:'DELETE',headers:{'X-Portable-Token':app.token}})).status,404);
   const tested=await fetch(`${app.origin}/api/connection/test`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify(profile)});
   assert.deepEqual(await tested.json(),{ok:true,message:'Validated custom'});
 });
@@ -145,6 +151,24 @@ test('native Claude terminal conversations are imported with their project and t
   saveProfile(profile);const id='11111111-2222-4333-8444-555555555555',project=join(process.env.PORTABLE_AI_DATA_DIR,'claude','custom-api','projects','fixture-project');mkdirSync(project,{recursive:true});
   const rows=[{type:'user',cwd:temp,timestamp:'2026-01-01T00:00:00.000Z',message:{content:[{type:'text',text:'Terminal conversation'}]}},{type:'assistant',cwd:temp,timestamp:'2026-01-01T00:00:01.000Z',message:{id:'a',model:'test-model',content:[{type:'text',text:'Shared reply'}]}}];writeFileSync(join(project,`${id}.jsonl`),rows.map(JSON.stringify).join('\n')+'\n');
   const store=new SessionStore(join(temp,'native-import-sessions'));store.syncNative(readConfig());const imported=store.list().find(session=>session.sdkSessionId===id);assert.ok(imported);assert.equal(imported.workspace,temp);assert.equal(imported.nativeConversation,true);assert.deepEqual(store.get(imported.id).transcript.map(event=>event.text),['Terminal conversation','Shared reply']);
+});
+test('deleting a native conversation removes its Claude history file',async t=>{
+  saveProfile(profile);
+  const id='22222222-3333-4444-8555-666666666666',project=join(process.env.PORTABLE_AI_DATA_DIR,'claude','custom-api','projects','delete-project');mkdirSync(project,{recursive:true});
+  const file=join(project,`${id}.jsonl`),rows=[{type:'user',cwd:temp,timestamp:'2026-01-02T00:00:00.000Z',message:{content:[{type:'text',text:'Delete me'}]}},{type:'assistant',cwd:temp,message:{id:'b',model:'test-model',content:[{type:'text',text:'Gone soon'}]}}];
+  writeFileSync(file,rows.map(JSON.stringify).join('\n')+'\n');
+  const store=new SessionStore(join(temp,'native-delete-sessions'));store.syncNative(readConfig());const imported=store.list().find(session=>session.sdkSessionId===id);assert.ok(imported);assert.equal(store.get(imported.id).nativeSource,file);
+  const stale=store.create({workspace:temp,profile:readConfig().profiles.custom,trusted:true});stale.nativeConversation=true;stale.sdkSessionId='33333333-4444-4555-8666-777777777777';stale.nativeSource=join(temp,'gone-elsewhere.jsonl');store.save(stale);
+  const outside=join(temp,'outside.jsonl');writeFileSync(outside,'must stay');
+  const external=store.create({workspace:temp,profile:readConfig().profiles.custom,trusted:true});external.nativeConversation=true;external.sdkSessionId='44444444-5555-4666-8777-888888888888';external.nativeSource=outside;store.save(external);
+  const app=await startDashboard({port:0,store});t.after(()=>app.close());
+  assert.equal((await fetch(`${app.origin}/api/sessions/${imported.id}`,{method:'DELETE',headers:{'X-Portable-Token':app.token}})).status,200);
+  assert.equal(existsSync(file),false);assert.equal(store.get(imported.id),null);
+  store.syncNative(readConfig());assert.equal(store.list().some(session=>session.sdkSessionId===id),false);
+  assert.equal((await fetch(`${app.origin}/api/sessions/${stale.id}`,{method:'DELETE',headers:{'X-Portable-Token':app.token}})).status,200);assert.equal(store.get(stale.id),null);
+  assert.equal((await fetch(`${app.origin}/api/sessions/${external.id}`,{method:'DELETE',headers:{'X-Portable-Token':app.token}})).status,200);assert.equal(store.get(external.id),null);
+  assert.equal(readFileSync(outside,'utf8'),'must stay');
+  removeNativeSession({sdkSessionId:id,nativeSource:outside});assert.equal(readFileSync(outside,'utf8'),'must stay');
 });
 test('composer permissions map to the SDK and unrestricted access requires confirmation',async()=>{
   saveProfile({...profile,provider:'lmstudio',baseUrl:PROVIDERS.lmstudio.baseUrl});const p=readConfig().profiles.lmstudio;

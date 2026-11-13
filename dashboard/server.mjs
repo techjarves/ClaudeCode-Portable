@@ -8,6 +8,7 @@ import { readConfig, publicConfig, saveProfile, activateProfile, redact, validat
 import { PROVIDERS, discoverModels, testConnection } from '../lib/providers.mjs';
 import { runtimeStatus, installRuntime, rollbackRuntime, listLogs } from '../lib/runtime.mjs';
 import { SessionStore } from '../lib/sessions.mjs';
+import { removeNativeSession } from '../lib/native-sessions.mjs';
 import { AgentManager } from '../lib/agent.mjs';
 import { externalAdapterAvailable } from '../lib/external-adapter.mjs';
 import { readBody, json } from '../lib/http.mjs';
@@ -82,12 +83,14 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
         const projectless=body.projectless===true;if(projectless)mkdirSync(CHAT_WORKSPACE,{recursive:true,mode:0o700});
         return json(res,201,store.createConversation({workspace:projectless?CHAT_WORKSPACE:body.workspace,profile,trusted:body.trusted===true,projectless}));
       }
-      const match=url.pathname.match(/^\/api\/sessions\/([a-f0-9-]+)(?:\/(run|approve|cancel|events|attachments))?$/);
+      const match=url.pathname.match(/^\/api\/sessions\/([\w-]+)(?:\/(run|approve|cancel|events|attachments))?$/);
       if(match){
-        const [,id,action]=match;
+        const [,id,action]=match,sessionId=/^[a-f0-9-]{36}$/.test(id);
+        if(!action&&req.method==='DELETE'&&!sessionId){if(!store.deleteLegacy(id))return json(res,404,{error:'Session not found'});return json(res,200,{ok:true});}
+        if(!sessionId)return json(res,404,{error:'Session not found'});
         if(!store.get(id))return json(res,404,{error:'Session not found'});
         if(!action&&req.method==='GET'){const session=store.get(id);return json(res,200,{...session,transcript:sessionTranscript(session)});}
-        if(!action&&req.method==='DELETE'){if(manager.runs.has(id))throw new Error('Stop this session before deleting it');store.delete(id);removeAttachments(id);return json(res,200,{ok:true});}
+        if(!action&&req.method==='DELETE'){if(manager.runs.has(id))throw new Error('Stop this session before deleting it');removeNativeSession(store.get(id));store.delete(id);removeAttachments(id);return json(res,200,{ok:true});}
         if(action==='attachments'&&req.method==='POST')return json(res,201,{attachments:saveAttachments(id,body.files)});
         if(action==='approve'&&req.method==='POST'){manager.approve(id,body.requestId,body.approved===true,body.answers);return json(res,200,{ok:true});}
         if(action==='cancel'&&req.method==='POST'){await manager.cancel(id);return json(res,200,{ok:true});}
