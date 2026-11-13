@@ -49,6 +49,8 @@ App-owned runtimes, provider settings, chat history, attachments, caches, and lo
 | **Shared Claude History** | GUI and portable terminal sessions use real Claude Code conversation IDs and can resume the same history |
 | **Project + Normal Chats** | Work inside a selected folder or start an agent conversation without attaching a project |
 | **Provider Switching** | Switch directly between configured provider/model profiles from the composer |
+| **Custom Model Support** | Declare any model ID's context window; 1M windows also receive a Claude-compatible model-picker profile |
+| **Update Check** | Option 7 compares pinned Claude Code and Agent SDK versions with npm and installs newer releases with automatic pin rollback |
 | **Three Adapter Modes** | Built-in, external `claude-adapter`, and OpenAI Responses API support |
 | **Cross-Platform** | Windows, Linux, and macOS runtimes can coexist on the same portable drive |
 
@@ -144,6 +146,8 @@ OpenAI-compatible providers can use:
 
 All adapters bind only to `127.0.0.1` and use a fresh local token for every run.
 
+Extended thinking is disabled automatically for adapter-backed providers because the Chat Completions and Responses protocols cannot carry thinking blocks. Set the model's context window in the dashboard so Claude Code uses the correct limit for custom IDs; a 1,000,000-token window also maps the ID to Claude's 1M model profile.
+
 ---
 
 ## LM Studio Setup
@@ -190,6 +194,8 @@ Linux drives that cannot create symbolic links—including common NTFS USB mount
 
 Use menu options 5 and 6 to repair, update, or roll back the pinned runtime. Option 7 checks npm for newer Claude Code and Agent SDK releases and offers to install them.
 
+Interrupted installations are resumed: staged files are kept and reused on the next attempt. If an installation fails, the previous verified runtime stays in place and details are written to `data/logs/runtime-install.log`. Option 7 saves the current pins first and restores them automatically if the newer installation fails.
+
 ---
 
 ## Security & Privacy
@@ -227,8 +233,11 @@ Git is useful for agent-driven repository operations. Alpine/musl Linux is not s
 | `Cannot read properties of undefined (reading 'spec')` on Windows | Pull the latest version. Runtime installation now uses `--save=false`. |
 | `Error: claude native binary not installed` on a pen drive | Pull the latest version and run option 5 (repair). The installer now detects the leftover placeholder and copies the native binary without hardlinks, which FAT32/exFAT drives block. |
 | Node.js download looks stuck on Windows | Pull the latest version. `START.bat` now shows live progress with percent, MB downloaded, MB/s, and ETA, and retries interrupted downloads. |
+| Launcher window closes immediately on a startup error | Pull the latest version. `START.bat` now pauses on failure so the message stays visible; set `PORTABLE_AI_NO_PAUSE` to skip the pause. |
+| Folder picker opens behind the browser on Windows | Pull the latest version. The picker now opens as a topmost dialog and passes the selected folder correctly. |
+| `Extended thinking is unavailable through the local protocol adapter` | Pull the latest version. Adapter-backed providers now disable extended thinking automatically. |
 | `Invalid session ID` after using terminal mode on Windows | Pull the latest version. Windows Claude history paths are now parsed correctly. |
-| Runtime installation was interrupted | Run option 5 or `start.sh install`. The previous verified runtime is preserved. |
+| Runtime installation was interrupted | Run option 5 or `start.sh install` again. Staged files are reused and the previous verified runtime is preserved; details are logged to `data/logs/runtime-install.log`. |
 | Dashboard says disconnected | Use the newest tokenized URL printed by the currently running launcher. |
 | Port 3000 is already in use | Stop the earlier dashboard or set `PORTABLE_AI_PORT` before launching. |
 | Provider rejects the request | Read the full provider error shown in the chat and verify model/tool compatibility. |
