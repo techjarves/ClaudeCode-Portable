@@ -118,6 +118,34 @@ Run `START.bat` or `start.sh` to open:
 
 Pressing Enter selects the dashboard.
 
+### Launcher Commands
+
+`START.bat` and `start.sh` accept the menu options as command-line arguments, plus maintenance commands. The numeric keys work only inside the interactive prompt; on the command line, use the names.
+
+| Command | Action |
+|---|---|
+| `START.bat` | Open the interactive menu (Enter selects the dashboard) |
+| `START.bat dashboard` | Option 1 — open the studio dashboard |
+| `START.bat cli` | Option 2 — launch the Claude Code terminal |
+| `START.bat --quick` | Same as `cli` |
+| `START.bat --offline` | Same as `cli` |
+| `START.bat resume <session-id>` | Resume an official Claude Code terminal session |
+| `START.bat local-setup` | Option 4 — set up local models |
+| `START.bat install` | Option 5 — install, repair, or update the pinned runtime |
+| `START.bat update` | Same as `install` |
+| `START.bat rollback` | Option 6 — restore the previous runtime |
+| `START.bat check-update` | Option 7 — check npm for newer pinned releases and install them |
+| `START.bat status` | Print runtime status as JSON |
+| `START.bat use-ollama <model>` | Configure an installed Ollama model as the active profile |
+
+Extra arguments after `cli` or `resume` are forwarded to the official Claude Code CLI, for example:
+
+```powershell
+.\START.bat cli --permission-mode acceptEdits
+```
+
+The model always comes from the active provider profile. `--dangerously-skip-permissions` and `--permission-mode bypassPermissions` are forwarded, but the launcher first requires typing `UNRESTRICTED` in the terminal.
+
 ---
 
 ## Supported AI Providers
