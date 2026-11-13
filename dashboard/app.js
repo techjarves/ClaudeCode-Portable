@@ -3,6 +3,7 @@ import DOMPurify from '/vendor/purify.js';
 import hljs from '/vendor/highlight.js';
 import { icon, hydrateIcons } from '/icons.js';
 import { ComposerRequests } from '/requests.js';
+import { isComposerSubmitKey } from '/composer.js';
 
 const $=s=>document.querySelector(s);
 const $$=s=>[...document.querySelectorAll(s)];
@@ -422,7 +423,10 @@ $('#composer').onsubmit=async e=>{
     await consumeRun(`/api/sessions/${sessionId}/run`,{prompt,attachments:uploaded.map(file=>file.id),permissionMode:state.permissionMode,...(state.permissionMode==='bypassPermissions'?{confirmation:'UNRESTRICTED'}:{})},sessionId);
   }catch(err){toast(err.message);}
 };
-$('#prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();$('#composer').requestSubmit();}});
+const prompt=$('#prompt');let promptIsComposing=false;
+prompt.addEventListener('compositionstart',()=>promptIsComposing=true);
+prompt.addEventListener('compositionend',()=>promptIsComposing=false);
+prompt.addEventListener('keydown',e=>{if(isComposerSubmitKey(e,promptIsComposing)){e.preventDefault();$('#composer').requestSubmit();}});
 $('#prompt').addEventListener('input',syncComposer);
 const formatBytes=size=>size>=1024*1024?`${(size/1024/1024).toFixed(1)} MB`:size>=1024?`${Math.ceil(size/1024)} KB`:`${size} B`;
 function renderAttachments(){
