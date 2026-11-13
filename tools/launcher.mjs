@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { ROOT } from '../lib/paths.mjs';
 import { readConfig, saveProfile } from '../lib/config.mjs';
 import { PROVIDERS, providerEnvironment } from '../lib/providers.mjs';
-import { executableAt, installRuntime, isStubExecutable, repairNativeBinary, runtimeStatus, rollbackRuntime, run } from '../lib/runtime.mjs';
+import { availableUpdate, executableAt, installRuntime, isStubExecutable, manifest, repairNativeBinary, runtimeStatus, rollbackRuntime, run, savePinnedVersions } from '../lib/runtime.mjs';
 import { startAdapter } from '../lib/adapter.mjs';
 import { startExternalAdapter } from '../lib/external-adapter.mjs';
 import { startResponsesAdapter } from '../lib/responses-adapter.mjs';
@@ -29,10 +29,28 @@ async function main() {
   }
   if (!executable) await installRuntime({ onOutput: s => process.stdout.write(s) });
   if (!command) {
-    console.log('\n  CLAUDECODE-PORTABLE\n  Official Claude Code · Your choice of model\n\n  1  Open studio dashboard\n  2  Launch Claude Code terminal\n  3  Configure providers\n  4  Set up local models\n  5  Repair / update pinned runtime\n  6  Roll back runtime\n');
+    console.log('\n  CLAUDECODE-PORTABLE\n  Official Claude Code · Your choice of model\n\n  1  Open studio dashboard\n  2  Launch Claude Code terminal\n  3  Configure providers\n  4  Set up local models\n  5  Repair / update pinned runtime\n  6  Roll back runtime\n  7  Check for updates\n');
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     const answer = await rl.question('Choose [1]: '); rl.close();
-    command = ({ '2': 'cli', '3': 'dashboard', '4': 'local-setup', '5': 'update', '6': 'rollback' })[answer] || 'dashboard';
+    command = ({ '2': 'cli', '3': 'dashboard', '4': 'local-setup', '5': 'update', '6': 'rollback', '7': 'check-update' })[answer] || 'dashboard';
+  }
+  if (command === 'check-update') {
+    const updates = await availableUpdate();
+    const names = Object.keys(updates);
+    if (!names.length) return console.log(`\nRuntime is up to date (${manifest.dependencies['@anthropic-ai/claude-code']}).`);
+    console.log('\nUpdate available:');
+    for (const name of names) console.log(`  ${name}  ${updates[name].current} -> ${updates[name].latest}`);
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await rl.question('Install this update now? [y/N] '); rl.close();
+    if (!/^y(es)?$/i.test(answer.trim())) return console.log('Update skipped.');
+    const previous = savePinnedVersions(Object.fromEntries(names.map(name => [name, updates[name].latest])));
+    try {
+      await installRuntime({ onOutput: s => process.stdout.write(s) });
+    } catch (error) {
+      savePinnedVersions(previous);
+      throw error;
+    }
+    return;
   }
   if (command === 'update') return installRuntime({ onOutput: s => process.stdout.write(s) });
   if (command === 'rollback') return rollbackRuntime();
@@ -50,7 +68,7 @@ async function main() {
     }
     const stop = async () => { await dashboard.close(); process.exit(0); }; process.once('SIGINT',stop); process.once('SIGTERM',stop); return;
   }
-  if (!['cli','resume'].includes(command)) throw new Error('Commands: dashboard, cli, resume <session-id>, install, update, rollback, status, local-setup');
+  if (!['cli','resume'].includes(command)) throw new Error('Commands: dashboard, cli, resume <session-id>, install, update, check-update, rollback, status, local-setup');
   let config = readConfig(); let profile = config.profiles[config.active];
   if (!profile) {
     if (!process.stdin.isTTY) throw new Error('Configure a provider in the dashboard first');
@@ -73,7 +91,6 @@ async function main() {
   const useAdapter = PROVIDERS[profile.provider].transport === 'openai';
   const adapter = !useAdapter ? null : profile.adapter === 'external' ? await startExternalAdapter(profile) : profile.adapter === 'responses' ? await startResponsesAdapter(profile) : await startAdapter(profile);
   const env = providerEnvironment(profile, { adapter });
-  if (adapter) env.MAX_THINKING_TOKENS = '0';
   console.log(`\nOfficial Claude Code → ${PROVIDERS[profile.provider].name} / ${profile.model}${useAdapter && profile.adapter === 'external' ? ` · external adapter (${profile.toolFormat || 'native'})` : useAdapter && profile.adapter === 'responses' ? ' · Responses API adapter' : ''}\nNon-Claude models have provider-dependent feature compatibility.\n`);
   try { await run(executableAt(), ['--model',profile.model,...args], { stdio:'inherit', env, cwd: process.cwd() }); }
   finally { await adapter?.close(); }

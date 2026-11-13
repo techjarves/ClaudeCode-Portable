@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { request } from 'node:http';
 const temp=mkdtempSync(join(tmpdir(),'portable-ai-tests-'));process.env.PORTABLE_AI_DATA_DIR=join(temp,'data');
 const { saveProfile,activateProfile,readConfig,publicConfig,redact,parseLegacy,migrateLegacy,validateBaseURL }=await import('../lib/config.mjs');
-const { PROVIDERS,providerEnvironment,testConnection }=await import('../lib/providers.mjs');
+const { PROVIDERS,providerEnvironment,profileSettings,testConnection }=await import('../lib/providers.mjs');
 const { SessionStore }=await import('../lib/sessions.mjs');
 const { AgentManager }=await import('../lib/agent.mjs');
 const { startDashboard }=await import('../dashboard/server.mjs');
@@ -36,6 +36,22 @@ test('provider environments remove ambient credentials and pin all model roles',
   assert.equal(env.HOME,'/unchanged');assert.equal(env.ANTHROPIC_AUTH_TOKEN,'local-token');assert.equal(env.OPENAI_API_KEY,undefined);assert.equal(env.AWS_SECRET_ACCESS_KEY,undefined);assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL,profile.model);
   assert.throws(()=>providerEnvironment({provider:'openrouter',auth:'login',baseUrl:'https://openrouter.ai/api'},{}),/Subscription/);
   assert.throws(()=>providerEnvironment({provider:'anthropic',auth:'login'},{dashboard:true}),/terminal-only/);
+});
+test('unknown model IDs declare their context window and behaviour profile',()=>{
+  const parent={HOME:'/unchanged',PATH:'/bin'};
+  const adapter={url:'http://127.0.0.1:1',token:'local-token'};
+  const settingsFile=join(temp,'data/claude/custom-api/settings.json');
+  mkdirSync(join(temp,'data/claude/custom-api'),{recursive:true});writeFileSync(settingsFile,JSON.stringify({theme:'dark'}));
+  const declared={...profile,contextWindow:1000000};
+  const env=providerEnvironment(declared,{adapter,parent});
+  assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS,'1000000');
+  assert.deepEqual(profileSettings(declared),{modelPicker:{options:[{model:profile.model,behavesAs:'claude-sonnet-5-5'}]}});
+  const merged=JSON.parse(readFileSync(settingsFile,'utf8'));
+  assert.equal(merged.theme,'dark');assert.equal(merged.modelPicker.options[0].behavesAs,'claude-sonnet-5-5');
+  // A smaller declared window must stay authoritative, so no behavesAs row is added.
+  assert.equal(profileSettings({...profile,contextWindow:128000}),null);
+  assert.equal(providerEnvironment({...profile,contextWindow:128000},{adapter,parent}).CLAUDE_CODE_MAX_CONTEXT_TOKENS,'128000');
+  assert.equal(profileSettings({...profile,provider:'anthropic',contextWindow:1000000}),null);
 });
 test('connection test uses an authenticated provider endpoint and reports rejected keys',async()=>{
   let request;

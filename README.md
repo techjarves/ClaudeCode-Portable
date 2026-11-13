@@ -111,6 +111,7 @@ Run `START.bat` or `start.sh` to open:
 4  Set up local models
 5  Repair / update pinned runtime
 6  Roll back runtime
+7  Check for updates
 ```
 
 Pressing Enter selects the dashboard.
@@ -179,15 +180,15 @@ Local inference needs enough RAM/VRAM, a useful context window, and a model capa
 | Component | Pinned Version |
 |---|---|
 | **Node.js** | `24.21.0` |
-| **Claude Code** | `2.1.247` |
-| **Claude Agent SDK** | `0.3.247` |
+| **Claude Code** | `2.1.323` |
+| **Claude Agent SDK** | `0.3.323` |
 | **claude-adapter** | `2.2.1` |
 
 Each OS/architecture stores its own runtime under `engine/`. Windows, macOS, Linux x64, and Linux ARM64 installations can coexist and are reused after their first download.
 
 Linux drives that cannot create symbolic links—including common NTFS USB mounts—automatically use a link-free Node/npm layout. npm binary links are disabled because the launcher resolves the verified package executable directly. The same install flow avoids npm 10.9.8's Windows save-step crash.
 
-Use menu options 5 and 6 to repair, update, or roll back the pinned runtime.
+Use menu options 5 and 6 to repair, update, or roll back the pinned runtime. Option 7 checks npm for newer Claude Code and Agent SDK releases and offers to install them.
 
 ---
 
