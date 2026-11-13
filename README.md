@@ -229,6 +229,7 @@ Interrupted installations are resumed: staged files are kept and reused on the n
 ## Security & Privacy
 
 - Dashboard and adapter servers bind to `127.0.0.1` only.
+- Plain HTTP is allowed only for loopback, RFC 1918 LAN, IPv6 ULA/link-local, and link-local `169.254.0.0/16` hosts — which includes the cloud metadata address `169.254.169.254`. Traffic and API keys to those endpoints are unencrypted; use HTTPS or a trusted network.
 - Dashboard APIs require a fresh access token printed at launch.
 - Provider credentials are excluded from normal bootstrap/configuration responses.
 - API keys are stored as plaintext in portable `data/settings.json`; protect the drive.
