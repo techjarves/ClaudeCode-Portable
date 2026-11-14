@@ -8,9 +8,11 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
 
 
-**🎥 Watch the Setup & Demo Video:** [https://youtu.be/xPfZyV20_RY](https://youtu.be/xPfZyV20_RY)
+**🎥 Watch the Setup & Demo Video:** [xPfZyV20_RY.mp4](docs/videos/xPfZyV20_RY.mp4)
 
-[![ClaudeCode-Portable Demo](https://img.youtube.com/vi/xPfZyV20_RY/maxresdefault.jpg)](https://youtu.be/xPfZyV20_RY)
+[![ClaudeCode-Portable Demo](docs/images/maxresdefault.jpg)](docs/videos/xPfZyV20_RY.mp4)
+
+The video and its thumbnail ship with the repository, so this page loads nothing from YouTube. Original upload: `https://youtu.be/xPfZyV20_RY`.
 
 ---
 
