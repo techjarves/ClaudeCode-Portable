@@ -104,6 +104,22 @@ Claude Code only knows Anthropic model IDs; any other ID warned "Model isn't rec
   session (`d101ffb`).
 - The delete button stays visible in the sidebar for synced conversations (`247aeb1`).
 
+#### Deleting a conversation no longer needs a second click
+
+The sidebar rebuilt its whole list with `innerHTML` on every refresh. When a refresh landed between
+pressing and releasing the mouse — for example while a session was still loading — the button the
+press started on was destroyed, and the browser then delivered no click at all. The press looked
+ignored, so the trash had to be pressed twice.
+
+- The list is no longer rewritten when the generated markup is identical, so the frequent redundant
+  renders (`resetSession()` followed by `refreshSessions()`) leave the DOM untouched.
+- A press inside the list now defers any re-render until the release, so the click always lands on
+  the element it started on. The deferred render runs right after it.
+- Row, project-toggle and delete handlers are delegated on the list container instead of per node, so
+  a rebuilt row can never keep a stale handler or lose one.
+- Verified in Chromium: a re-render requested while the mouse is held down no longer swallows the
+  click, while the previous behaviour (raw `innerHTML` replacement during the press) does drop it.
+
 #### Image paste in the terminal: Ctrl+V added next to Alt+V
 
 Claude Code binds image paste to `alt+v` on Windows — `ctrl+v` only on macOS, Linux, and WSL — and the

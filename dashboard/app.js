@@ -153,6 +153,29 @@ function updateHeader(){
   $('#settings-version').textContent=state.runtime.version||'Not installed';$('#health-runtime').textContent=state.runtime.installed?'Ready':'Not installed';renderModelSwitcher();renderContextMeter();
   $('#delete-conversation').hidden=!state.current;
 }
+// The list is rebuilt from a string, so it must not be rewritten when nothing
+// changed: replacing the nodes between a mousedown and its mouseup swallows the
+// click, which is why a delete or a session switch occasionally needed a second
+// press. Every refresh first compares the markup and leaves the DOM alone when
+// it is identical.
+let sessionsMarkup=null,sessionPointerDown=false,sessionsRenderPending=false;
+// A press inside the list blocks re-rendering until it is released, so the
+// click that follows always lands on the element it started on.
+$('#session-list').addEventListener('mousedown',()=>{sessionPointerDown=true;},true);
+document.addEventListener('mouseup',()=>{
+  if(!sessionPointerDown)return;
+  sessionPointerDown=false;
+  // Runs after the click the release produces, never before it.
+  if(sessionsRenderPending){sessionsRenderPending=false;setTimeout(renderSessions,0);}
+},true);
+// A release outside the window never reaches the document, so the guard must
+// not stay set: the window losing focus ends the press for us.
+document.addEventListener('dragend',()=>{sessionPointerDown=false;},true);
+window.addEventListener('blur',()=>{
+  if(!sessionPointerDown)return;
+  sessionPointerDown=false;
+  if(sessionsRenderPending){sessionsRenderPending=false;renderSessions();}
+});
 function renderSessions(){
   const search=$('#session-search').value.toLowerCase(),sessions=[...state.sessions,...state.legacy].filter(s=>s.title.toLowerCase().includes(search));$('#session-count').textContent=state.sessions.length;
   const age=value=>{const seconds=Math.max(0,(Date.now()-new Date(value||0))/1000);return seconds<60?'now':seconds<3600?`${Math.floor(seconds/60)}m`:seconds<86400?`${Math.floor(seconds/3600)}h`:seconds<604800?`${Math.floor(seconds/86400)}d`:`${Math.floor(seconds/604800)}w`;};
@@ -164,11 +187,24 @@ function renderSessions(){
     html+=`<section class="sidebar-group project-group ${expanded?'expanded':'collapsed'}"><button type="button" class="project-heading" data-project-toggle="${escape(workspace)}" aria-expanded="${expanded}" title="${expanded?'Collapse':'Expand'} ${escape(shortPath(workspace))}">${icon('folder')}<strong>${escape(shortPath(workspace))}</strong><span class="project-count">${items.length}</span><span class="project-chevron">${icon('chevron')}</span></button><div class="project-conversations" ${expanded?'':'hidden'}>${items.map(row).join('')}</div></section>`;
   }
   if(recent.length)html+=`<section class="sidebar-group conversations-group"><div class="sidebar-group-title"><span>Conversations</span><span>${recent.length}</span></div>${recent.map(row).join('')}</section>`;
-  $('#session-list').innerHTML=html||`<p class="sidebar-empty">${search?'No matching conversations.':'Start a normal chat or open a project folder.'}</p>`;
-  $$('[data-session]').forEach(b=>b.onclick=()=>loadSession(b.dataset.session,!!b.dataset.legacy).catch(e=>toast(e.message)));
-  $$('[data-project-toggle]').forEach(b=>b.onclick=()=>{const workspace=b.dataset.projectToggle;if(state.expandedProjects.has(workspace))state.expandedProjects.delete(workspace);else state.expandedProjects.add(workspace);renderSessions();});
-  $$('[data-delete]').forEach(b=>b.onclick=()=>deleteConversation(b.dataset.delete));
+  const markup=html||`<p class="sidebar-empty">${search?'No matching conversations.':'Start a normal chat or open a project folder.'}</p>`;
+  if(markup===sessionsMarkup)return;
+  // Replacing the rows while a mouse button is held down destroys the element
+  // the press started on, and the browser then never delivers the click. Wait
+  // until the press is finished instead of dropping the user's click.
+  if(sessionPointerDown){sessionsRenderPending=true;return;}
+  sessionsMarkup=markup;$('#session-list').innerHTML=markup;
 }
+// Delegated once: a rebuilt row can never leave a stale or missing handler
+// behind, and the handler always reads the id from the row that was clicked.
+$('#session-list').addEventListener('click',event=>{
+  const toggle=event.target.closest('[data-project-toggle]');
+  if(toggle){const workspace=toggle.dataset.projectToggle;if(state.expandedProjects.has(workspace))state.expandedProjects.delete(workspace);else state.expandedProjects.add(workspace);return renderSessions();}
+  const remove=event.target.closest('[data-delete]');
+  if(remove)return deleteConversation(remove.dataset.delete);
+  const select=event.target.closest('[data-session]');
+  if(select)loadSession(select.dataset.session,!!select.dataset.legacy).catch(e=>toast(e.message));
+});
 async function refreshSessions(){const data=await api('/api/sessions');state.sessions=data.sessions;state.legacy=data.legacy;const latest=state.sessions.find(s=>s.id===state.current?.id);if(latest){Object.assign(state.current,latest);if(state.page==='studio')$('#page-title').textContent=latest.title;}renderSessions();}
 async function deleteConversation(id){
   if(!await confirmAction('Delete conversation?','This permanently removes the conversation and its Claude Code history.','Delete'))return;
