@@ -164,6 +164,52 @@ test('both protocols are trimmed without touching the conversation', () => {
   assert.deepEqual(trimOpenAIBody({ messages: [{ role: 'user', content: 'hi' }] }).body.messages, untouched.messages);
 });
 
+test('an HTTPS upstream is reached over TLS, and /health reports it', async t => {
+  // A remote Ollama may require HTTPS. Forwarding with node:http would send
+  // plaintext to a TLS listener and every turn would fail.
+  const { createServer: createTlsServer } = await import('node:https');
+  // A throwaway self-signed certificate keeps the test hermetic. It proves the
+  // transport (TLS, not plaintext), not the trust store.
+  const { execFileSync } = await import('node:child_process');
+  const { mkdtempSync, readFileSync: readFile } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const certDir = mkdtempSync(join(tmpdir(), 'portable-tls-'));
+  let key, cert;
+  try {
+    const keyFile = join(certDir, 'key.pem'), certFile = join(certDir, 'cert.pem');
+    execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', keyFile, '-out', certFile, '-days', '1', '-subj', '/CN=127.0.0.1'], { stdio: 'pipe' });
+    key = readFile(keyFile, 'utf8');
+    cert = readFile(certFile, 'utf8');
+  } catch {
+    t.skip('openssl not available');
+    return;
+  }
+  t.after(() => rmSync(certDir, { recursive: true, force: true }));
+  const upstream = createTlsServer({ key, cert }, (req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ tls: true, path: req.url }));
+  });
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  const proxy = createProxyServer({ upstreamPort: upstream.address().port, upstreamSecure: true });
+  await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+  t.after(() => { proxy.close(); upstream.close(); });
+  const base = `http://127.0.0.1:${proxy.address().port}`;
+
+  const health = await (await fetch(`${base}/health`)).json();
+  assert.match(health.upstream, /^https:/, 'health must advertise the TLS scheme');
+
+  const previous = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  try {
+    const res = await fetch(`${base}/v1/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ system: 'x', messages: [] }) });
+    const body = await res.json();
+    assert.equal(body.tls, true, 'the upstream was reached over TLS');
+  } finally {
+    if (previous === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previous;
+  }
+});
+
 test('the proxy forwards requests upstream after trimming and answers /health', async t => {
   const upstream = createServer((req, res) => {
     let body = '';
@@ -230,16 +276,31 @@ test('the proxy forwards to the server the profile names', async () => {
       startSpeedProxy: async options => { seen.push(options); return { started: true, url: 'http://127.0.0.1:11435' }; },
     },
   );
-  assert.deepEqual(seen[0].upstream, { host: '192.168.1.50', port: 11434, url: 'http://192.168.1.50:11434' });
+  assert.deepEqual(seen[0].upstream, { host: '192.168.1.50', port: 11434, secure: false, url: 'http://192.168.1.50:11434' });
   await lan.cleanup();
 });
 
-test('ollamaUpstream ignores a path and defaults the port', () => {
-  assert.deepEqual(ollamaUpstream('http://192.168.1.50:11434/v1'), { host: '192.168.1.50', port: 11434, url: 'http://192.168.1.50:11434' });
-  assert.deepEqual(ollamaUpstream('http://box'), { host: 'box', port: 11434, url: 'http://box:11434' });
-  assert.deepEqual(ollamaUpstream('https://box'), { host: 'box', port: 443, url: 'http://box:443' });
+test('ollamaUpstream keeps the scheme and defaults the port', () => {
+  assert.deepEqual(ollamaUpstream('http://192.168.1.50:11434/v1'), { host: '192.168.1.50', port: 11434, secure: false, url: 'http://192.168.1.50:11434' });
+  assert.deepEqual(ollamaUpstream('http://box'), { host: 'box', port: 11434, secure: false, url: 'http://box:11434' });
+  // HTTPS must survive: the proxy would otherwise send plaintext to a TLS listener.
+  assert.deepEqual(ollamaUpstream('https://box'), { host: 'box', port: 443, secure: true, url: 'https://box:443' });
+  assert.deepEqual(ollamaUpstream('https://box:8443/v1'), { host: 'box', port: 8443, secure: true, url: 'https://box:8443' });
   assert.equal(ollamaUpstream('not a url'), null);
   assert.equal(ollamaUpstream(''), null);
+});
+
+test('an HTTPS profile reaches the proxy as HTTPS', async () => {
+  const seen = [];
+  const session = await prepareLocalSession(
+    { provider: 'ollama', baseUrl: 'https://ollama.example.com' },
+    {
+      hasServer: () => false,
+      startSpeedProxy: async options => { seen.push(options); return { started: true, url: 'http://127.0.0.1:11435' }; },
+    },
+  );
+  assert.deepEqual(seen[0].upstream, { host: 'ollama.example.com', port: 443, secure: true, url: 'https://ollama.example.com:443' });
+  await session.cleanup();
 });
 
 test('a foreign service on the proxy port is not adopted', async () => {
