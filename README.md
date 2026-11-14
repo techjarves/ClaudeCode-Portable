@@ -394,6 +394,17 @@ Playwright is installed next to the runtime and travels with the drive: the npm 
 
 The version is pinned in `tools/runtime-manifest.json` (`"playwright": "1.65.1"`), because it decides which Chromium build is used — an unpinned update would download the browsers again. `--only-shell` installs the headless build only (~300 MB instead of ~750 MB). `--no-remove` is used so browser builds copied from another machine are not deleted; the `.links` file stores absolute paths, so after moving the folder run option 5 once.
 
+### How a session learns that Playwright exists
+
+A new session does not discover the bundled installation by itself — it sees a workspace and its own configuration, nothing else. The launcher therefore writes a **skill** into the profile directory (`data/claude/<provider>-<auth>/skills/portable-playwright/SKILL.md`) whenever Playwright is installed:
+
+- Claude Code lists every skill's name and description in the system prompt, so the agent knows browser automation is available without paying for the full document up front.
+- The agent loads the details only when the task calls for a screenshot or browser automation: the exact CLI path, the browsers folder, the `npx` warning, and the headless-only limitation.
+- The paths are absolute, because a session's working directory is usually the user's project, not this folder.
+- Without Playwright the skill is not written, and a stale copy is removed. A skill of your own in the same folder is never touched.
+
+The profile directory is the right place: sessions run with `settingSources: ['user']`, so a `CLAUDE.md` inside a project is not loaded, while `~/.claude` — here `CLAUDE_CONFIG_DIR` — is.
+
 ```bash
 # Windows
 set "PLAYWRIGHT_BROWSERS_PATH=%CD%\engine\playwright-browsers"

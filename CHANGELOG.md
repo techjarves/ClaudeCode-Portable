@@ -11,6 +11,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+#### Sessions learn that Playwright exists
+
+A session saw only its workspace and its own configuration, so nothing told the agent that the
+bundled browser automation is there — it would have had to stumble over `engine/playwright`.
+
+- The launcher writes a skill to `data/claude/<provider>-<auth>/skills/portable-playwright/SKILL.md`
+  whenever Playwright is installed. Claude Code lists its name and description in the system prompt,
+  so the agent knows the capability exists and loads the details only when a task needs them.
+- The skill documents the absolute CLI and browser paths (a session's working directory is usually
+  the user's project), the `screenshot` invocation, script usage, the `npx` warning, and the
+  headless-only limitation.
+- Without Playwright the skill is not written and a stale copy is removed; a skill the user added to
+  the same folder is never touched.
+- Verified with a real session: the SDK's skills dialog reports `portable-playwright` with
+  `source: "user"`.
+- The profile directory is the only place this can work: sessions run with
+  `settingSources: ['user']`, so a `CLAUDE.md` inside a project would not be loaded.
+
 ## [2.0] - 2026-11-14
 
 ### Summary
