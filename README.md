@@ -150,6 +150,7 @@ Pressing Enter selects the dashboard. Option 8 toggles the permission mode and r
 | `START.bat check-update` | Option 7 — check npm for newer pinned releases and install them |
 | `START.bat status` | Print runtime status as JSON |
 | `START.bat permissions [on\|off\|status]` | Show or change the stored bypass-permissions mode |
+| `START.bat websearch [on\|off\|status]` | Show or change the stored web-search-skill switch (menu option 9) |
 | `START.bat use-ollama <model>` | Configure an installed Ollama model as the active profile |
 
 Extra arguments after `cli` or `resume` are forwarded to the official Claude Code CLI, for example:
@@ -390,6 +391,37 @@ Local paths in a reply or a tool's output are clickable and open with your own a
 
 A browser cannot start a local file from an HTTP page, so the click goes to the token-protected `POST /api/open`, which checks that the path is absolute and exists and then hands it to `explorer.exe` (Windows), `open` (macOS) or `xdg-open` (Linux). The path is passed as a single argument, never through a shell, so characters like `&` or quotes cannot become a command.
 
+
+## Web Search in a Session
+
+`WebSearch` is a **server-side** tool: the search runs inside the Anthropic API. Every other provider in this project — a custom gateway through the local adapter, DeepSeek's Anthropic endpoint, OpenRouter, local models — answers it with:
+
+```
+400 Server tool web_search_20250305 is unsupported by this provider
+```
+
+`WebFetch` is a **client-side** tool: Claude Code fetches the URL from this machine, so it works with every provider. A search engine is just a URL, and a skill tells the session which ones work:
+
+| Route | Behavior |
+|---|---|
+| `https://www.bing.com/search?q=<query>&setlang=de` | Usable result pages, the default for a web query |
+| `https://news.google.com/rss/search?q=<query>&hl=de&gl=DE&ceid=DE:de` | Headlines with source and timestamp, newest first |
+| `https://html.duckduckgo.com/html/` | Bot check instead of results — not used |
+| Pages behind JavaScript | Fetched empty; use the Playwright skill instead of guessing |
+
+The launcher writes `data/claude/<provider>-<auth>/skills/portable-websearch/SKILL.md` on every start, so the agent knows the recipe from the first session — the same mechanism as the Playwright skill. Verified in a real session: asked for a news headline, the model fetched Bing and the Google-News feed and reported source and timestamp; article pages that blocked the fetch were named as blocked rather than invented.
+
+The skill is **on by default** and is a stored preference, so an update never turns it back on after you switched it off:
+
+| Command | Effect |
+|---|---|
+| `START.bat websearch status` | Print the current switch, menu option 9 does the same |
+| `START.bat websearch off` | Remove the skill from the profile; sessions are no longer told how to search, `WebFetch` itself stays available |
+| `START.bat websearch on` | Write it back on the next launch |
+
+Switching it off removes only this project's skill; a skill of your own in the same folder is untouched. The document also tells the model to treat fetched text as data, never as instructions.
+
+---
 
 ## Browser Automation (Playwright)
 

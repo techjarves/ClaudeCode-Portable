@@ -10,6 +10,7 @@ import { startAdapter } from '../lib/adapter.mjs';
 import { startExternalAdapter } from '../lib/external-adapter.mjs';
 import { startResponsesAdapter } from '../lib/responses-adapter.mjs';
 import { bypassPermissionsEnabled, resolvePermissionFlags, setBypassPermissions } from '../lib/permissions.mjs';
+import { setWebSearch, webSearchEnabled } from '../lib/websearch.mjs';
 import { prepareLocalSession } from '../lib/local-session.mjs';
 import { availablePlaywrightUpdate, ensurePlaywright, installPlaywright, playwrightStatus, savePlaywrightPin } from '../lib/playwright.mjs';
 
@@ -31,6 +32,10 @@ function describeBypass(enabled) {
   return enabled ? 'ON  (commands and file writes run without approval)' : 'OFF (Claude Code asks before changes)';
 }
 
+function describeWebSearch(enabled) {
+  return enabled ? 'ON  (sessions know how to search through WebFetch)' : 'OFF (the skill is not written into the profile)';
+}
+
 async function main() {
   let [command, ...args] = process.argv.slice(2);
   if (command === '--quick') command = 'cli';
@@ -47,6 +52,16 @@ async function main() {
     if (!['on', 'off'].includes(value)) throw new Error('Use permissions on, permissions off, or permissions status');
     setBypassPermissions(value === 'on');
     return console.log(`Bypass permissions: ${describeBypass(value === 'on')}\nSaved in data/settings.json. Applies to the next launch.`);
+  }
+  if (command === 'websearch') {
+    const value = String(args[0] || 'status').toLowerCase();
+    if (value === 'status') {
+      const enabled = webSearchEnabled(readConfig().preferences);
+      return console.log(`Web search skill: ${describeWebSearch(enabled)}\nChange with: ${LAUNCHER_NAME} websearch on|off`);
+    }
+    if (!['on', 'off'].includes(value)) throw new Error('Use websearch on, websearch off, or websearch status');
+    await setWebSearch(value === 'on');
+    return console.log(`Web search skill: ${describeWebSearch(value === 'on')}\nSaved in data/settings.json. Applies to the next launch.`);
   }
   if (command === 'use-ollama') {
     if(!args[0]) throw new Error('Provide the installed Ollama model name');
@@ -66,12 +81,17 @@ async function main() {
     // user can adjust it and still launch in the same run.
     let choice;
     while (!choice) {
-      console.log(`\n  CLAUDECODE-PORTABLE\n  Official Claude Code · Your choice of model\n\n  1  Open studio dashboard\n  2  Launch Claude Code terminal\n  3  Configure providers\n  4  Set up local models\n  5  Repair / update pinned runtime\n  6  Roll back runtime\n  7  Check for updates\n  8  Bypass permissions: ${bypassPermissionsEnabled(readConfig()) ? 'ON' : 'OFF'}\n`);
+      console.log(`\n  CLAUDECODE-PORTABLE\n  Official Claude Code · Your choice of model\n\n  1  Open studio dashboard\n  2  Launch Claude Code terminal\n  3  Configure providers\n  4  Set up local models\n  5  Repair / update pinned runtime\n  6  Roll back runtime\n  7  Check for updates\n  8  Bypass permissions: ${bypassPermissionsEnabled(readConfig()) ? 'ON' : 'OFF'}\n  9  Web search skill: ${webSearchEnabled(readConfig().preferences) ? 'ON' : 'OFF'}\n`);
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       const answer = await rl.question('Choose [1]: '); rl.close();
       if (answer.trim() === '8') {
         const enabled = setBypassPermissions(!bypassPermissionsEnabled(readConfig()));
         console.log(`\nBypass permissions is now ${enabled ? 'ON — approvals disabled for terminal launches' : 'OFF — Claude Code asks before changes'}.`);
+        continue;
+      }
+      if (answer.trim() === '9') {
+        const enabled = await setWebSearch(!webSearchEnabled(readConfig().preferences));
+        console.log(`\nWeb search skill is now ${enabled ? 'ON — sessions know the WebFetch recipe' : 'OFF — the skill is removed from the profile'}.`);
         continue;
       }
       choice = ({ '2': 'cli', '3': 'dashboard', '4': 'local-setup', '5': 'update', '6': 'rollback', '7': 'check-update' })[answer.trim()] || 'dashboard';
@@ -126,7 +146,7 @@ async function main() {
     }
     const stop = async () => { await dashboard.close(); process.exit(0); }; process.once('SIGINT',stop); process.once('SIGTERM',stop); return;
   }
-  if (!['cli','resume'].includes(command)) throw new Error('Commands: dashboard, cli, resume <session-id>, install, update, check-update, rollback, status, local-setup');
+  if (!['cli','resume'].includes(command)) throw new Error('Commands: dashboard, cli, resume <session-id>, install, update, check-update, rollback, status, local-setup, permissions, websearch');
   let config = readConfig(); let profile = config.profiles[config.active];
   if (!profile) {
     if (!process.stdin.isTTY) throw new Error('Configure a provider in the dashboard first');
@@ -158,7 +178,7 @@ async function main() {
   const adapter = !useAdapter ? null : profile.adapter === 'external' ? await startExternalAdapter(profile) : profile.adapter === 'responses' ? await startResponsesAdapter(profile) : await startAdapter(profile);
   // Ollama: start the bundled server and the prompt-trimming proxy first.
   const local = await prepareLocalSession(profile);
-  const env = providerEnvironment(local.profile, { adapter });
+  const env = providerEnvironment(local.profile, { adapter, preferences: config.preferences });
   console.log(`\nOfficial Claude Code → ${PROVIDERS[profile.provider].name} / ${profile.model}${useAdapter && profile.adapter === 'external' ? ` · external adapter (${profile.toolFormat || 'native'})` : useAdapter && profile.adapter === 'responses' ? ' · Responses API adapter' : ''}\nBypass permissions: ${resolved.bypass ? `ON (no approval prompts; change with ${LAUNCHER_NAME} permissions off)` : 'OFF (approval prompts enabled)'}${local.notes.length ? `\n${local.notes.join('\n')}` : ''}\nNon-Claude models have provider-dependent feature compatibility.\n`);
   try { await run(executableAt(), ['--model',profile.model,...args], { stdio:'inherit', env, cwd: process.cwd() }); }
   finally { await adapter?.close(); await local.cleanup(); }
