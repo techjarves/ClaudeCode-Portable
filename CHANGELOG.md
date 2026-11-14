@@ -1,0 +1,199 @@
+# Changelog
+
+All notable changes to ClaudeCode-Portable are documented here.
+
+This file describes how this branch differs from the upstream project it was forked from
+(`rainman74/ClaudeCode-Portable`, `main` at `247aeb1`). It is written from the perspective of a
+user who already knows the upstream launcher: only the differences are listed.
+
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+### Summary
+
+| Area | Upstream | This branch |
+|---|---|---|
+| Bundled Node.js | 24.21.0 | **26.13.1** (LTS "Lithium") |
+| Git for Windows | expected on the host | detected, **or downloaded automatically** |
+| Session resume | `START.bat resume <id>` only | **standalone `RESUME.bat` / `resume.sh`** with full argument handling |
+| Permission mode | per launch, always asked | **stored preference, default ON**, changeable permanently or per launch |
+| Host footprint | app data only | `HOME`/`AppData`/XDG of the session **redirected into `data/`** |
+| Local models | manual server start | **Ollama server + speed proxy started and stopped automatically** |
+| Tests | 54 | **84** |
+| Node.js pin | one location | launcher, POSIX launcher, CI matrix, `engines`, README |
+
+---
+
+### Added
+
+#### Standalone session resume (`RESUME.bat`, `resume.sh`)
+
+Upstream only offered `START.bat resume <session-id>`, which still ran the full launcher: runtime
+checks, provider setup, update handling. This branch adds a resume path that does exactly one thing.
+
+- `RESUME.bat` (Windows) and `resume.sh` (Linux/macOS) are self-contained entry points.
+- They verify that Node.js, the Claude Code executable and `data/settings.json` exist, and fail with
+  a clear "run START.bat first" message instead of installing, repairing, updating or reconfiguring
+  anything. This is the behavioural difference from `START.bat`: nothing is repaired silently.
+- Arguments are parsed in Node (`lib/resume.mjs`), not in batch, so quoting, spaces and Unicode in
+  paths work on every platform and the rules are unit-tested:
+  - `<session-id>` (positional) or `--resume <session-id>`
+  - `--cwd <directory>` or a positional directory
+  - `--safe` / `--unrestricted` for a one-off permission override
+  - duplicates, missing values, unknown flags and malformed IDs are rejected with exit code 1
+  - an existing directory always wins over the positional session-ID interpretation
+- Without an ID the most recent conversation in the working directory is continued; if none exists,
+  a warning is printed and a new session starts (upstream behaviour, preserved).
+- The default working directory is the project folder.
+
+New files: `RESUME.bat`, `resume.sh`, `lib/resume.mjs`, `tools/resume.mjs`, `tests/resume.test.mjs`.
+
+#### Bypass permissions as a stored setting (default ON)
+
+Upstream chose the mode in an interactive menu on every launch. This branch stores it, so the
+launcher, the resume path and the studio agree, and the choice survives restarts.
+
+- Stored as `preferences.bypassPermissions` in `data/settings.json`; **missing value means ON**.
+- Applies to `START.bat cli`, `--quick`, `--offline`, `START.bat resume`, `RESUME.bat`,
+  `./start.sh cli`, `./start.sh resume` and `./resume.sh`.
+- Change it permanently with `START.bat permissions on|off`, `./start.sh permissions on|off`,
+  `START.bat permissions status`, or menu option 8 (toggles and returns to the menu).
+- Override it for a single launch with `--safe` (approvals on) or `--unrestricted` (approvals off).
+  Neither switch is forwarded to Claude Code.
+- Passing `--dangerously-skip-permissions` or `--permission-mode bypassPermissions` yourself still
+  requires typing `UNRESTRICTED`; the stored preference does not weaken that check.
+- The effective mode is printed on every terminal launch (`Bypass permissions: ON/OFF`).
+
+New files: `lib/permissions.mjs`, `tests/permissions.test.mjs`.
+
+#### Git Bash handling
+
+Claude Code on Windows needs Git Bash for its shell tool. Upstream assumed it was installed.
+
+- `lib/git.mjs` resolves a usable `bash.exe` in this order: `CLAUDE_CODE_GIT_BASH_PATH`, the bundled
+  `engine/git-win-x64`, the standard installation paths, then the directories around any `git.exe`
+  on `PATH` — including MSYS2 layouts such as `<root>/ucrt64/bin/git.exe`, where `bash.exe` lives
+  two levels up.
+- The session environment receives `CLAUDE_CODE_GIT_BASH_PATH` and Git's `cmd`, `bin` and `usr/bin`
+  prepended to `PATH`.
+- `tools/bootstrap.ps1` downloads PortableGit **only when no Git for Windows is present**, and keeps
+  the download out of the startup path for everyone else. A failed download is a warning, not an
+  abort, so the app still starts.
+
+New file: `lib/git.mjs`, covered by `tests/local.test.mjs`.
+
+#### Zero-footprint environment
+
+Upstream redirected only `CLAUDE_CONFIG_DIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME`
+inside the launcher batch file.
+
+- `portableEnvironment()` (`lib/providers.mjs`) also points `HOME`, `USERPROFILE`, `APPDATA` and
+  `LOCALAPPDATA` at `data/home`, `data/app_data` and `data/local_app_data`, and creates them.
+- It is applied to the **session child process only**. The dashboard server keeps the host
+  environment, so browser and system integration are unaffected.
+- The provider environment filter still removes ambient credentials first, so a host
+  `ANTHROPIC_API_KEY` cannot leak into a session.
+
+#### Automatic Ollama server and speed proxy
+
+Upstream had no speed proxy and left starting the local server to the user.
+
+- When the active profile is Ollama, every terminal launch starts the bundled
+  `data/ollama/ollama.exe` and the speed proxy, then routes the session through the proxy.
+- The proxy (`tools/local-proxy.mjs`) trims Claude Code's system prompt from roughly 10k tokens to
+  ~300 before it reaches the model. It understands **both** protocols:
+  - `/v1/messages` — how Claude Code reaches Ollama through its Anthropic-compatible endpoint.
+    A proxy that only rewrites `/chat/completions` never sees these requests.
+  - `/chat/completions` — other OpenAI-style clients
+- Truncation cuts at a sentence boundary and appends a marker instead of slicing mid-word.
+- `/health` endpoint; activity is written to `data/logs/proxy.log` only, never to the terminal.
+- Tunable with `PORTABLE_PROXY_PORT` and `PORTABLE_PROXY_MAX_CHARS`.
+- Shutdown is exact: **only processes this launch started are stopped**. A server or proxy the user
+  started elsewhere keeps running.
+- Failures degrade instead of blocking: no bundled Ollama means the external server is used; a proxy
+  that cannot bind its port means the session runs untrimmed and says so.
+
+New files: `lib/local-session.mjs`, `tools/local-proxy.mjs`; extended `lib/local-models.mjs`,
+`tools/launcher.mjs`, `lib/resume.mjs`.
+
+#### Launcher and documentation
+
+- Menu option 8 shows and toggles the permission mode.
+- Launcher hints name the script actually running (`START.bat` vs `start.sh`).
+- `README.md`: permission-mode matrix for Windows and Linux/macOS, environment-variable reference,
+  Ollama automation, zero-footprint notes, updated project structure and troubleshooting entries.
+
+---
+
+### Changed
+
+- **Node.js 24.21.0 → 26.13.1** (LTS "Lithium"), updated in `tools/bootstrap.ps1`, `start.sh`, the
+  CI matrix (`node-version: '26'`), `package.json` (`engines: >=26`) and the README. An existing
+  installation is replaced automatically on the next launch; the previous runtime is kept as
+  `engine/node-win32-<arch>.previous.<timestamp>`.
+- `canUseTool` is installed only for permission modes that can actually consult it (see below).
+
+---
+
+### Fixed
+
+#### Native sessions could not run a turn — `Cannot read properties of undefined (reading 'push')`
+
+Sessions imported from the Claude history only carry `messages` and `transcript`; `syncNative`
+created them without an `events` array, and the agent appended to it on the first turn.
+
+- `syncNative` now writes `events: []` and preserves an existing log.
+- `AgentManager.start` normalises `messages` and `events` before the run.
+- The dashboard reconnect endpoint tolerates a missing log.
+
+#### A failed start blocked the session forever — `A turn is already running`
+
+`start()` registered the run before doing work that could throw. A failure left the entry in the run
+map, so every later attempt was rejected.
+
+- The registration is now released when that phase throws.
+- Covered by a regression test.
+
+#### Providers rejected tool search — `Unsupported content: tool_reference`
+
+Claude Code's tool search returns `tool_reference` blocks naming deferred tools. The Anthropic API
+expands them server-side; third-party providers do not, and the adapters threw.
+
+- The adapters now skip `tool_reference` blocks. No information is lost: every tool schema —
+  including deferred ones — is forwarded anyway, because `defer_loading` is not propagated.
+- A tool result made up only of references is sent as `Tool returned no textual output.` rather than
+  an empty body.
+
+#### SDK warning `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED`
+
+The dashboard passed both `canUseTool` and `permissionMode: 'bypassPermissions'`. The SDK approves
+every tool call before consulting the callback in that mode, so the callback was dead code and the
+SDK warned on every turn.
+
+- The callback is now installed only for `default` and `acceptEdits`. Approval handling in those
+  modes is unchanged, and the warning is gone at its source rather than suppressed.
+
+---
+
+### Tests
+
+54 → **84** test cases (`npm test`), all passing, plus `npm run check`.
+
+New suites: `tests/resume.test.mjs`, `tests/permissions.test.mjs`, `tests/local.test.mjs`.
+Regression tests were added for the three bugs above and for the permission behaviour of both the
+terminal launcher and the studio.
+
+---
+
+### Upgrade notes
+
+1. Run `START.bat` / `./start.sh` once. Node.js 26.13.1 is fetched automatically; the previous
+   runtime is kept next to it.
+2. Git for Windows is reused when already installed. Without it, PortableGit is downloaded once into
+   `engine/git-win-x64/`.
+3. Terminal sessions now run with approvals disabled by default. Run
+   `START.bat permissions off` (or `./start.sh permissions off`, or menu option 8) if you want to be
+   asked before every write or command.
+4. `RESUME.bat` no longer goes through `START.bat`, so it will not repair a broken runtime. If it
+   reports a missing runtime, run `START.bat` first.

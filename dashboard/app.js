@@ -306,7 +306,7 @@ function scrollConversation(force=false){
 $('#conversation').addEventListener('scroll',()=>{const box=$('#conversation');state.followOutput=box.scrollHeight-box.scrollTop-box.clientHeight<=48;},{passive:true});
 async function loadSession(id,legacy=false){
   if(!legacy&&state.current?.id===id){setPage('studio');scrollConversation(true);return;}
-  resetSession();const s=legacy?state.legacy.find(x=>x.id===id):await api(`/api/sessions/${id}`);state.current=s;state.lastRunDurationMs=Number(s.durationMs)||0;state.workspace=s.workspace||state.workspace;state.projectless=!!s.projectless;state.activePermissionMode=s.permissionMode||'default';
+  resetSession();const s=legacy?state.legacy.find(x=>x.id===id):await api(`/api/sessions/${id}`);state.current=s;state.lastRunDurationMs=Number(s.durationMs)||0;state.workspace=s.workspace||state.workspace;state.projectless=!!s.projectless;state.activePermissionMode=s.permissionMode||state.permissionMode;
   if(legacy)s.messages?.forEach(m=>addMessage(m.role,typeof m.content==='string'?m.content:pretty(m.content)));
   else for(const event of s.transcript||[])renderEvent(event,true);
   if(!['running','queued','awaiting_approval'].includes(s.status))requests.clear();
@@ -500,6 +500,11 @@ for(const [id,action]of[['runtime-install','install'],['runtime-rollback','rollb
 
 async function init(){
   const data=await api('/api/bootstrap');Object.assign(state,{config:data.config,providers:data.providers,sessions:data.sessions,runtime:data.runtime,workspace:data.workspace,responseTimeoutMs:data.responseTimeoutMs||state.responseTimeoutMs});
+  // The studio follows the stored bypass-permissions mode, which defaults to
+  // ON. Change it permanently with START.bat permissions off, or per turn with
+  // the composer picker.
+  const defaultMode=data.defaultPermissionMode||(data.config.preferences?.bypassPermissions===false?'default':'bypassPermissions');
+  state.permissionMode=defaultMode;state.activePermissionMode=defaultMode;
   $('#health-connection').textContent='Connected';updateHeader();resetSession();renderProviders();await refreshSessions();$('#send').disabled=true;
 }
 init().catch(e=>{$('#connection').innerHTML='<span class="status-dot failed"></span>Disconnected';$('#health-connection').textContent='Disconnected';setRunStatus('failed',e.message);toast(e.message);});

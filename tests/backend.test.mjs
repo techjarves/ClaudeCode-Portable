@@ -35,7 +35,8 @@ test('legacy config parsing handles CRLF and keeps equal signs',()=>{
 test('provider environments remove ambient credentials and pin all model roles',()=>{
   const parent={HOME:'/unchanged',PATH:'/bin',ANTHROPIC_API_KEY:'must-not-leak',ANTHROPIC_AUTH_TOKEN:'must-not-leak',CLAUDE_CODE_USE_OPENAI:'1',OPENAI_API_KEY:'must-not-leak',AWS_SECRET_ACCESS_KEY:'must-not-leak'};
   const env=providerEnvironment(profile,{adapter:{url:'http://127.0.0.1:1',token:'local-token'},parent});
-  assert.equal(env.HOME,'/unchanged');assert.equal(env.ANTHROPIC_AUTH_TOKEN,'local-token');assert.equal(env.OPENAI_API_KEY,undefined);assert.equal(env.AWS_SECRET_ACCESS_KEY,undefined);assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL,profile.model);
+  // HOME is redirected into the portable data folder instead of the host's.
+  assert.equal(env.HOME,join(process.env.PORTABLE_AI_DATA_DIR,'home'));assert.equal(env.ANTHROPIC_AUTH_TOKEN,'local-token');assert.equal(env.OPENAI_API_KEY,undefined);assert.equal(env.AWS_SECRET_ACCESS_KEY,undefined);assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL,profile.model);
   assert.throws(()=>providerEnvironment({provider:'openrouter',auth:'login',baseUrl:'https://openrouter.ai/api'},{}),/Subscription/);
   assert.throws(()=>providerEnvironment({provider:'anthropic',auth:'login'},{dashboard:true}),/terminal-only/);
 });
@@ -151,6 +152,33 @@ test('native Claude terminal conversations are imported with their project and t
   saveProfile(profile);const id='11111111-2222-4333-8444-555555555555',project=join(process.env.PORTABLE_AI_DATA_DIR,'claude','custom-api','projects','fixture-project');mkdirSync(project,{recursive:true});
   const rows=[{type:'user',cwd:temp,timestamp:'2026-01-01T00:00:00.000Z',message:{content:[{type:'text',text:'Terminal conversation'}]}},{type:'assistant',cwd:temp,timestamp:'2026-01-01T00:00:01.000Z',message:{id:'a',model:'test-model',content:[{type:'text',text:'Shared reply'}]}}];writeFileSync(join(project,`${id}.jsonl`),rows.map(JSON.stringify).join('\n')+'\n');
   const store=new SessionStore(join(temp,'native-import-sessions'));store.syncNative(readConfig());const imported=store.list().find(session=>session.sdkSessionId===id);assert.ok(imported);assert.equal(imported.workspace,temp);assert.equal(imported.nativeConversation,true);assert.deepEqual(store.get(imported.id).transcript.map(event=>event.text),['Terminal conversation','Shared reply']);
+  // Imported conversations must carry an event log the run loop can append to.
+  assert.deepEqual(store.get(imported.id).events,[]);
+});
+test('an imported conversation without an event log can still run a turn',async()=>{
+  saveProfile({...profile,provider:'lmstudio',baseUrl:PROVIDERS.lmstudio.baseUrl});const p=readConfig().profiles.lmstudio;
+  const store=new SessionStore(join(temp,'native-run-sessions'));
+  const session=store.create({workspace:temp,profile:p,trusted:true});
+  const legacy={...session};delete legacy.events;store.save(legacy);
+  assert.equal(store.get(session.id).events,undefined);
+  const manager=new AgentManager(store,{executable:()=>'/fake/claude',sdkLoader:async()=>({query:()=>{const q=(async function*(){yield {type:'system',subtype:'init',session_id:'native-run-session'};yield {type:'assistant',message:{id:'n',content:[{type:'text',text:'Resumed.'}]}};yield {type:'result',is_error:false};})();q.close=()=>{};return q;}})});
+  await(await manager.start(session.id,'continue')).promise;
+  const saved=store.get(session.id);
+  assert.ok(Array.isArray(saved.events));assert.ok(saved.events.some(event=>event.type==='message'));
+  assert.equal(saved.status,'completed');
+});
+test('a failed start does not leave the session locked as already running',async()=>{
+  saveProfile({...profile,provider:'lmstudio',baseUrl:PROVIDERS.lmstudio.baseUrl});const p=readConfig().profiles.lmstudio;
+  const store=new SessionStore(join(temp,'failed-start-sessions'));
+  const session=store.create({workspace:temp,profile:p,trusted:true});
+  const manager=new AgentManager(store,{executable:()=>'/fake/claude',sdkLoader:async()=>({query:()=>{const q=(async function*(){yield {type:'result',is_error:false};})();q.close=()=>{};return q;}})});
+  // A write failure after runs.set() reproduces any crash inside start().
+  const save=store.save.bind(store);store.save=()=>{throw new Error('disk full');};
+  await assert.rejects(manager.start(session.id,'first'),/disk full/);
+  assert.equal(manager.runs.has(session.id),false,'the failed run must be released');
+  store.save=save;
+  const retried=await manager.start(session.id,'second');await retried.promise;
+  assert.equal(store.get(session.id).status,'completed');
 });
 test('deleting a native conversation removes its Claude history file',async t=>{
   saveProfile(profile);
@@ -177,6 +205,9 @@ test('composer permissions map to the SDK and unrestricted access requires confi
   for(const permissionMode of ['default','acceptEdits','bypassPermissions']){
     await(await manager.start(s.id,'test permissions',{permissionMode,...(permissionMode==='bypassPermissions'?{confirmation:'UNRESTRICTED'}:{})})).promise;
     assert.equal(observed.at(-1).permissionMode,permissionMode);assert.equal(observed.at(-1).allowDangerouslySkipPermissions,permissionMode==='bypassPermissions');assert.equal(store.get(s.id).permissionMode,permissionMode);
+    // The SDK ignores canUseTool in bypass mode and warns about it, so it is only
+    // installed where it can actually gate a tool call.
+    assert.equal(typeof observed.at(-1).canUseTool==='function',permissionMode!=='bypassPermissions');
   }
   await assert.rejects(manager.start(s.id,'bad',{permissionMode:'bypassPermissions'}),/confirmation/);
   await assert.rejects(manager.start(s.id,'bad',{permissionMode:'auto'}),/Unsupported permission/);
@@ -242,4 +273,24 @@ test('legacy transcript migration never fabricates ordering when event boundarie
   const migrated=sessionTranscript({messages:[{role:'user',content:'old question'},{role:'assistant',content:'old answer'}],events:[{type:'tool',id:'old-tool',name:'Read'},{type:'tool_result',id:'old-tool',output:'x'}]});
   assert.deepEqual(migrated.map(e=>e.type),['message','message','history_note','tool','tool_result']);
   assert.match(migrated[2].text,/positions were not recorded/);
+});
+test('the studio turn follows the stored bypass-permissions default',async t=>{
+  saveProfile({...profile,provider:'lmstudio',baseUrl:PROVIDERS.lmstudio.baseUrl});const p=readConfig().profiles.lmstudio;
+  const store=new SessionStore(join(temp,'studio-permission-sessions'));
+  const session=store.create({workspace:temp,profile:p,trusted:true});
+  const seen=[];
+  const manager={runs:new Map(),responseTimeoutMs:120000,
+    async start(id,prompt,options,listener){seen.push(options);const run={listeners:new Set([listener]),approvals:new Map(),promise:Promise.resolve()};this.runs.set(id,run);listener({type:'status',status:'queued'});return run;},
+    async approve(){},async cancel(){},async close(){}};
+  const app=await startDashboard({port:0,store,manager});t.after(()=>app.close());
+  const run=async body=>{const response=await fetch(`${app.origin}/api/sessions/${session.id}/run`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify(body)});await response.text();return response.status;};
+  // No permissionMode in the request: the stored default (ON) applies.
+  assert.equal(await run({prompt:'first'}),200);
+  assert.equal(seen[0].permissionMode,'bypassPermissions');
+  assert.equal(seen[0].confirmation,'UNRESTRICTED');
+  // An explicit per-turn choice is passed through unchanged.
+  manager.runs.clear();
+  assert.equal(await run({prompt:'second',permissionMode:'default'}),200);
+  assert.equal(seen[1].permissionMode,'default');
+  assert.equal(seen[1].confirmation,undefined);
 });

@@ -9,6 +9,16 @@ import { availableUpdate, executableAt, installRuntime, isStubExecutable, manife
 import { startAdapter } from '../lib/adapter.mjs';
 import { startExternalAdapter } from '../lib/external-adapter.mjs';
 import { startResponsesAdapter } from '../lib/responses-adapter.mjs';
+import { bypassPermissionsEnabled, resolvePermissionFlags, setBypassPermissions } from '../lib/permissions.mjs';
+import { prepareLocalSession } from '../lib/local-session.mjs';
+
+// The launcher runs from START.bat and start.sh alike; hints must name the
+// script the user actually invoked.
+const LAUNCHER_NAME = process.platform === 'win32' ? 'START.bat' : 'start.sh';
+
+function describeBypass(enabled) {
+  return enabled ? 'ON  (commands and file writes run without approval)' : 'OFF (Claude Code asks before changes)';
+}
 
 async function main() {
   let [command, ...args] = process.argv.slice(2);
@@ -17,6 +27,16 @@ async function main() {
   if (command === 'install' || command === 'update') return console.log(await installRuntime({ onOutput: s => process.stdout.write(s) }));
   if (command === 'rollback') return rollbackRuntime();
   if (command === 'status') return console.log(JSON.stringify(await runtimeStatus(), null, 2));
+  if (command === 'permissions') {
+    const value = String(args[0] || 'status').toLowerCase();
+    if (value === 'status') {
+      const enabled = bypassPermissionsEnabled(readConfig());
+      return console.log(`Bypass permissions: ${describeBypass(enabled)}\nChange with: ${LAUNCHER_NAME} permissions on|off`);
+    }
+    if (!['on', 'off'].includes(value)) throw new Error('Use permissions on, permissions off, or permissions status');
+    setBypassPermissions(value === 'on');
+    return console.log(`Bypass permissions: ${describeBypass(value === 'on')}\nSaved in data/settings.json. Applies to the next launch.`);
+  }
   if (command === 'use-ollama') {
     if(!args[0]) throw new Error('Provide the installed Ollama model name');
     saveProfile({provider:'ollama',auth:'api',baseUrl:PROVIDERS.ollama.baseUrl,key:'',model:args[0]});
@@ -29,10 +49,21 @@ async function main() {
   }
   if (!executable) await installRuntime({ onOutput: s => process.stdout.write(s) });
   if (!command) {
-    console.log('\n  CLAUDECODE-PORTABLE\n  Official Claude Code · Your choice of model\n\n  1  Open studio dashboard\n  2  Launch Claude Code terminal\n  3  Configure providers\n  4  Set up local models\n  5  Repair / update pinned runtime\n  6  Roll back runtime\n  7  Check for updates\n');
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const answer = await rl.question('Choose [1]: '); rl.close();
-    command = ({ '2': 'cli', '3': 'dashboard', '4': 'local-setup', '5': 'update', '6': 'rollback', '7': 'check-update' })[answer] || 'dashboard';
+    // Option 8 toggles the stored preference and returns to the menu so the
+    // user can adjust it and still launch in the same run.
+    let choice;
+    while (!choice) {
+      console.log(`\n  CLAUDECODE-PORTABLE\n  Official Claude Code · Your choice of model\n\n  1  Open studio dashboard\n  2  Launch Claude Code terminal\n  3  Configure providers\n  4  Set up local models\n  5  Repair / update pinned runtime\n  6  Roll back runtime\n  7  Check for updates\n  8  Bypass permissions: ${bypassPermissionsEnabled(readConfig()) ? 'ON' : 'OFF'}\n`);
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await rl.question('Choose [1]: '); rl.close();
+      if (answer.trim() === '8') {
+        const enabled = setBypassPermissions(!bypassPermissionsEnabled(readConfig()));
+        console.log(`\nBypass permissions is now ${enabled ? 'ON — approvals disabled for terminal launches' : 'OFF — Claude Code asks before changes'}.`);
+        continue;
+      }
+      choice = ({ '2': 'cli', '3': 'dashboard', '4': 'local-setup', '5': 'update', '6': 'rollback', '7': 'check-update' })[answer.trim()] || 'dashboard';
+    }
+    command = choice;
   }
   if (command === 'check-update') {
     const updates = await availableUpdate();
@@ -82,7 +113,15 @@ async function main() {
     if (!args[0] || !/^[a-zA-Z0-9-]+$/.test(args[0])) throw new Error('Provide an official Claude Code session ID');
     args = ['--resume',...args];
   }
-  if (args.some(a => /dangerously-skip-permissions|permission-mode=bypassPermissions/.test(a)) || args.includes('bypassPermissions')) {
+  // Bypass permissions comes from the stored preference (default ON).
+  // --safe opts out for one launch, --unrestricted opts in for one launch.
+  const resolved = resolvePermissionFlags(args, {
+    bypass: bypassPermissionsEnabled(config),
+    safe: args.includes('--safe'),
+    forceOn: args.includes('--unrestricted'),
+  });
+  args = resolved.args;
+  if (resolved.explicit) {
     if (!process.stdin.isTTY) throw new Error('Unrestricted mode requires an interactive confirmation');
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     const answer = await rl.question('Unrestricted mode can execute commands and change files without asking. Type UNRESTRICTED: '); rl.close();
@@ -90,9 +129,11 @@ async function main() {
   }
   const useAdapter = PROVIDERS[profile.provider].transport === 'openai';
   const adapter = !useAdapter ? null : profile.adapter === 'external' ? await startExternalAdapter(profile) : profile.adapter === 'responses' ? await startResponsesAdapter(profile) : await startAdapter(profile);
-  const env = providerEnvironment(profile, { adapter });
-  console.log(`\nOfficial Claude Code → ${PROVIDERS[profile.provider].name} / ${profile.model}${useAdapter && profile.adapter === 'external' ? ` · external adapter (${profile.toolFormat || 'native'})` : useAdapter && profile.adapter === 'responses' ? ' · Responses API adapter' : ''}\nNon-Claude models have provider-dependent feature compatibility.\n`);
+  // Ollama: start the bundled server and the prompt-trimming proxy first.
+  const local = await prepareLocalSession(profile);
+  const env = providerEnvironment(local.profile, { adapter });
+  console.log(`\nOfficial Claude Code → ${PROVIDERS[profile.provider].name} / ${profile.model}${useAdapter && profile.adapter === 'external' ? ` · external adapter (${profile.toolFormat || 'native'})` : useAdapter && profile.adapter === 'responses' ? ' · Responses API adapter' : ''}\nBypass permissions: ${resolved.bypass ? `ON (no approval prompts; change with ${LAUNCHER_NAME} permissions off)` : 'OFF (approval prompts enabled)'}${local.notes.length ? `\n${local.notes.join('\n')}` : ''}\nNon-Claude models have provider-dependent feature compatibility.\n`);
   try { await run(executableAt(), ['--model',profile.model,...args], { stdio:'inherit', env, cwd: process.cwd() }); }
-  finally { await adapter?.close(); }
+  finally { await adapter?.close(); await local.cleanup(); }
 }
 main().catch(e => { console.error(`\nClaudeCode-Portable: ${e.message}`); process.exitCode=1; });

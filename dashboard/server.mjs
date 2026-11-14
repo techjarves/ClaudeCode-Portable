@@ -16,6 +16,7 @@ import { localStatus, startLocal, stopLocal, pullModel } from '../lib/local-mode
 import { sessionTranscript } from '../lib/transcript.mjs';
 import { pickWorkspace } from '../lib/workspace-picker.mjs';
 import { removeAttachments, resolveAttachments, saveAttachments } from '../lib/attachments.mjs';
+import { defaultPermissionMode, resolveDashboardPermissions } from '../lib/permissions.mjs';
 
 export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||3000),store=new SessionStore(),manager,token=randomBytes(32).toString('hex'),workspacePicker=pickWorkspace,connectionTester=testConnection}={}) {
   store.recover(); manager ||= new AgentManager(store);
@@ -47,7 +48,7 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
       if(!['GET','POST','DELETE'].includes(req.method))return json(res,405,{error:'Method not allowed'});
       if(req.method==='POST'&&!req.headers['content-type']?.startsWith('application/json'))return json(res,415,{error:'JSON required'});
       const body=req.method==='POST'?await readBody(req,url.pathname.endsWith('/attachments')?28*1024*1024:4*1024*1024):{};
-      if(url.pathname==='/api/bootstrap'&&req.method==='GET'){const config=readConfig();store.syncNative(config,new Set(manager.runs.keys()));return json(res,200,{config:publicConfig(config),providers:PROVIDERS,adapterOptions:['builtin','external','responses'],externalAdapterAvailable:externalAdapterAvailable(),sessions:store.list(),runtime:await runtimeStatus(),workspace:ROOT,responseTimeoutMs:manager.responseTimeoutMs});}
+      if(url.pathname==='/api/bootstrap'&&req.method==='GET'){const config=readConfig();store.syncNative(config,new Set(manager.runs.keys()));return json(res,200,{config:publicConfig(config),providers:PROVIDERS,adapterOptions:['builtin','external','responses'],externalAdapterAvailable:externalAdapterAvailable(),sessions:store.list(),runtime:await runtimeStatus(),workspace:ROOT,responseTimeoutMs:manager.responseTimeoutMs,defaultPermissionMode:defaultPermissionMode(config)});}
       if(url.pathname==='/api/config'&&req.method==='GET')return json(res,200,publicConfig());
       if(url.pathname==='/api/config/key'&&req.method==='GET'){
         const provider=url.searchParams.get('provider');if(!PROVIDERS[provider])throw new Error('Unknown provider');
@@ -99,11 +100,16 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
           if(restartRequired)throw new Error('Runtime changed. Restart the studio to load the verified runtime and SDK together.');
           let send;const queue=[];const listener=e=>send?send(e):queue.push(e);
           let active;
-          if(action==='run')active=await manager.start(id,body.prompt,{...body,attachments:resolveAttachments(id,body.attachments)},listener);
+          if(action==='run'){
+            // Follow the stored bypass-permissions mode when the request does
+            // not choose one; an explicit choice keeps its own confirmation.
+            const permissions=resolveDashboardPermissions({permissionMode:body.permissionMode,confirmation:body.confirmation});
+            active=await manager.start(id,body.prompt,{...body,...permissions,attachments:resolveAttachments(id,body.attachments)},listener);
+          }
           else{active=manager.runs.get(id);if(!active)return json(res,409,{error:'No active turn to reconnect'});active.listeners.add(listener);}
           res.writeHead(200,{'Content-Type':'text/event-stream','Connection':'keep-alive','Cache-Control':'no-store'});
           send=e=>res.write(`data: ${JSON.stringify(e)}\n\n`);queue.forEach(send);
-          if(action==='events')for(const e of store.get(id).events)if(e.type==='approval'&&active.approvals.has(e.requestId))send(e);
+          if(action==='events')for(const e of store.get(id)?.events||[])if(e.type==='approval'&&active.approvals.has(e.requestId))send(e);
           const heartbeat=setInterval(()=>res.write(': keepalive\n\n'),15000);
           res.on('close',()=>{clearInterval(heartbeat);active.listeners.delete(listener);});
           active.promise.finally(()=>{clearInterval(heartbeat);res.end();});return;

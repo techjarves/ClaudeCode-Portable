@@ -45,6 +45,9 @@ App-owned runtimes, provider settings, chat history, attachments, caches, and lo
 | **Official Claude Code** | Uses Anthropic's official CLI and Agent SDK — no replacement agent engine |
 | **9 AI Providers** | NVIDIA NIM · DeepSeek · OpenRouter · Google Gemini · Anthropic · OpenAI · Ollama · LM Studio · Custom API |
 | **Portable Runtime** | Node.js, Claude Code, caches, settings, and app data stay in the project folder |
+| **Zero Footprint** | `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA` and the XDG folders of every session point into `data/` |
+| **Git Bash Handling** | Uses an installed Git for Windows; downloads PortableGit only when none is present |
+| **Local Speed Proxy** | Trims the ~10k-token system prompt for Ollama, cutting first-token latency on CPU hardware |
 | **Studio Dashboard** | Streaming chat, Markdown, code highlighting, compact tool steps, approvals, attachments, and diagnostics |
 | **Shared Claude History** | GUI and portable terminal sessions use real Claude Code conversation IDs and can resume the same history |
 | **Project + Normal Chats** | Work inside a selected folder or start an agent conversation without attaching a project |
@@ -71,7 +74,7 @@ chmod +x start.sh
 ./start.sh
 ```
 
-On first launch, the project downloads checksum-verified Node.js and installs the pinned official Claude Code packages inside `engine/`. Every later launch reuses that installation.
+On first launch, the project downloads checksum-verified **Node.js 26.13.1** and installs the pinned official Claude Code packages inside `engine/`. Every later launch reuses that installation.
 
 > **First-time setup requires internet.** After setup, cloud providers still need internet; installed local Ollama models can run offline.
 
@@ -84,17 +87,21 @@ ClaudeCode-Portable/
 │
 ├── START.bat                  Windows launcher
 ├── start.sh                  Linux/macOS launcher
-├── RESUME.bat                Resume a Claude session on Windows
-├── resume.sh                 Resume a Claude session on Linux/macOS
+├── RESUME.bat                Standalone session resume (Windows)
+├── resume.sh                 Standalone session resume (Linux/macOS)
 │
 ├── dashboard/                Browser studio interface
-├── lib/                      Providers, adapters, sessions, runtime, and agent bridge
+├── lib/                      Providers, adapters, sessions, runtime, Git, and agent bridge
 ├── tests/                    Automated, smoke, live-provider, and UI fixture tests
-├── tools/                    Launcher, runtime manifest, checks, and local-model setup
+├── tools/                    Launcher, runtime manifest, checks, speed proxy, and local-model setup
 │
 ├── data/                     Portable settings, credentials, chats, attachments, and logs
-└── engine/                   Per-platform Node.js and Claude Code runtimes
+│   ├── home/                 Redirected HOME/USERPROFILE of the Claude Code process
+│   ├── config/, app_data/, local_app_data/, cache/   Redirected XDG/AppData folders
+│   └── logs/proxy.log        Speed-proxy activity
+└── engine/                   Per-platform runtimes
     ├── node-<os>-<arch>/
+    ├── git-win-x64/          PortableGit — only when no system Git for Windows exists
     └── <os>-<arch>/current/
 ```
 
@@ -114,13 +121,14 @@ Run `START.bat` or `start.sh` to open:
 5  Repair / update pinned runtime
 6  Roll back runtime
 7  Check for updates
+8  Bypass permissions: ON
 ```
 
-Pressing Enter selects the dashboard.
+Pressing Enter selects the dashboard. Option 8 toggles the permission mode and returns to the menu.
 
 ### Launcher Commands
 
-`START.bat` and `start.sh` accept the menu options as command-line arguments, plus maintenance commands. The numeric keys work only inside the interactive prompt; on the command line, use the names.
+`START.bat` and `start.sh` accept the menu options as command-line arguments, plus maintenance commands. The numeric keys work only inside the interactive prompt; on the command line, use the names. On Linux/macOS, replace `START.bat` with `./start.sh` in every command below.
 
 | Command | Action |
 |---|---|
@@ -136,6 +144,7 @@ Pressing Enter selects the dashboard.
 | `START.bat rollback` | Option 6 — restore the previous runtime |
 | `START.bat check-update` | Option 7 — check npm for newer pinned releases and install them |
 | `START.bat status` | Print runtime status as JSON |
+| `START.bat permissions [on\|off\|status]` | Show or change the stored bypass-permissions mode |
 | `START.bat use-ollama <model>` | Configure an installed Ollama model as the active profile |
 
 Extra arguments after `cli` or `resume` are forwarded to the official Claude Code CLI, for example:
@@ -144,7 +153,103 @@ Extra arguments after `cli` or `resume` are forwarded to the official Claude Cod
 .\START.bat cli --permission-mode acceptEdits
 ```
 
-The model always comes from the active provider profile. `--dangerously-skip-permissions` and `--permission-mode bypassPermissions` are forwarded, but the launcher first requires typing `UNRESTRICTED` in the terminal.
+The model always comes from the active provider profile. Two launcher-only switches override the stored permission mode for a single launch and are not forwarded: `--safe` (approvals on) and `--unrestricted` (approvals off) — see [Permission Mode](#permission-mode-bypass-permissions).
+
+### Environment Variables
+
+| Variable | Effect |
+|---|---|
+| `PORTABLE_AI_PORT` | Dashboard port (default `3000`) |
+| `PORTABLE_PROXY_PORT` | Local speed-proxy port (default `11435`) |
+| `PORTABLE_PROXY_MAX_CHARS` | System-prompt budget for the proxy in characters (default `1200`, ≈300 tokens) |
+| `PORTABLE_AI_DATA_DIR` | Use a different data folder (default `<project>/data`) |
+| `PORTABLE_AI_NO_OPEN` | Do not open the browser when the dashboard starts |
+| `PORTABLE_AI_NO_PAUSE` | Do not pause on launcher errors (`START.bat`, `RESUME.bat`) |
+
+---
+
+## Permission Mode (Bypass Permissions)
+
+Terminal launches start with **bypass permissions ON** by default: Claude Code runs commands and changes files without asking, and no `UNRESTRICTED` confirmation is required. The setting is stored as `preferences.bypassPermissions` in `data/settings.json`, so it survives restarts.
+
+It applies to every terminal entry point:
+
+- `START.bat cli` / `./start.sh cli` — also `--quick` and `--offline`, which both map to `cli`
+- `START.bat resume <session-id>` / `./start.sh resume <session-id>`
+- `RESUME.bat` / `./resume.sh`
+
+### Turn it off permanently
+
+| Windows | Linux / macOS | Effect |
+|---|---|---|
+| `START.bat permissions off` | `./start.sh permissions off` | Claude Code asks before changes |
+| `START.bat permissions on` | `./start.sh permissions on` | Approvals disabled again |
+| `START.bat permissions status` | `./start.sh permissions status` | Print the current mode |
+| Menu option 8 | Menu option 8 | Toggles the mode, then returns to the menu |
+
+The launcher prints the effective mode on every terminal launch (`Bypass permissions: ON/OFF`).
+
+### Override it for a single launch
+
+| Windows | Linux / macOS | Effect |
+|---|---|---|
+| `START.bat cli --safe` | `./start.sh cli --safe` | Approvals ON for this launch |
+| `RESUME.bat --safe` | `./resume.sh --safe` | Approvals ON for this launch |
+| `START.bat cli --unrestricted` | `./start.sh cli --unrestricted` | Approvals OFF for this launch |
+| `RESUME.bat --unrestricted` | `./resume.sh --unrestricted` | Approvals OFF for this launch |
+
+`--safe` and `--unrestricted` also work after a resume command, for example `START.bat resume <session-id> --safe`. They are launcher-only switches and are never forwarded to Claude Code. Passing `--dangerously-skip-permissions` or `--permission-mode bypassPermissions` yourself still requires typing `UNRESTRICTED`.
+
+### Studio dashboard
+
+The studio starts a turn with the same stored mode. Switching a single turn to **Unrestricted** in the composer still requires typing `UNRESTRICTED` for that turn.
+
+---
+
+## Resuming a Session (`RESUME.bat` / `resume.sh`)
+
+`RESUME.bat` (Windows) and `resume.sh` (Linux/macOS) open Claude Code directly in an existing session. They bypass the launcher menu, provider setup, runtime installation and update checks, and read the active provider, model, and credential from `data/settings.json`. They follow the stored [permission mode](#permission-mode-bypass-permissions), which defaults to approvals disabled, so no `UNRESTRICTED` confirmation is needed.
+
+```bat
+RESUME.bat [<session-id>] [--resume <session-id>] [--cwd <directory>] [--safe | --unrestricted]
+```
+
+```bash
+./resume.sh [<session-id>] [--resume <session-id>] [--cwd <directory>] [--safe | --unrestricted]
+```
+
+| Parameter | Description |
+|---|---|
+| `<session-id>` | Session ID to resume (a UUID such as `11ed2a6e-3b31-4535-8f47-25fcba70bede`). If no ID is given, the most recent session for the working directory is continued. |
+| `--resume <session-id>` | Explicit form of the session ID — use either this or the positional ID, not both. |
+| `--cwd <directory>` | Working directory for the resumed session. Defaults to the project folder. A directory passed positionally is accepted as well. The session list is scoped to this directory, so pass the project folder the session originally ran in. |
+| `--safe` | Turn approval prompts on for this launch, overriding a stored ON. |
+| `--unrestricted` | Turn approval prompts off for this launch, overriding a stored OFF. |
+
+Session transcripts live under `data\claude\<provider>-<auth>\projects\<encoded-working-directory>\<session-id>.jsonl`; the file name without `.jsonl` is the ID to pass. The provider profile owns that directory, so a session is only found while the same provider profile is active.
+
+Examples:
+
+```bat
+REM Continue the most recent session for the project folder
+RESUME.bat
+
+REM Resume a specific session by its ID
+RESUME.bat 11ed2a6e-3b31-4535-8f47-25fcba70bede
+
+REM Resume a session that belongs to a project folder
+RESUME.bat --resume 11ed2a6e-3b31-4535-8f47-25fcba70bede --cwd "D:\Projects\my-app"
+
+REM Continue the most recent session for a project folder
+RESUME.bat --cwd "D:\Projects\my-app"
+```
+
+Notes:
+
+- Run `START.bat` / `start.sh` at least once first — the resume entry points install, repair, and update nothing. They print a clear error when the portable Node.js runtime, the Claude Code executable, or the provider configuration is missing.
+- Session ID and working directory can be combined in any order; duplicate `--resume` / `--cwd` values, unknown `--flags`, and malformed session IDs are rejected with an error.
+- Without an ID, an empty history falls back to a new session after a warning.
+- For approval prompts in a resumed session, add `--safe` (one launch) or run `START.bat permissions off` (permanent) — see [Permission Mode](#permission-mode-bypass-permissions).
 
 ---
 
@@ -205,13 +310,28 @@ bash start.sh local-setup
 
 Local inference needs enough RAM/VRAM, a useful context window, and a model capable of tool calling. Model downloads can require several gigabytes.
 
+### Automatic server and speed proxy
+
+When the active profile is **Ollama**, every terminal launch (`START.bat cli`, `START.bat resume`, `RESUME.bat`) prepares the local stack on its own:
+
+| Step | Behavior |
+|---|---|
+| Ollama server | The bundled `data/ollama/ollama.exe` is started if it is not already answering on `127.0.0.1:11434`. |
+| Speed proxy | `tools/local-proxy.mjs` listens on `127.0.0.1:11435` and trims Claude Code's system prompt from ~10k tokens to ~300 before it reaches the model. |
+| Routing | The session talks to the proxy; the proxy forwards to Ollama. If the proxy cannot start, the session uses Ollama directly and reports it. |
+| Shutdown | Only processes started by that launch are stopped afterwards. A server or proxy you started yourself keeps running. |
+
+If no bundled Ollama is installed, an external server is used as-is. Proxy activity is written to `data/logs/proxy.log` only, never to the terminal.
+
+An OpenAI-compatible provider that is not Ollama (LM Studio, custom gateways) keeps using the endpoint configured in the dashboard.
+
 ---
 
 ## Portable Runtime
 
 | Component | Pinned Version |
 |---|---|
-| **Node.js** | `24.21.0` |
+| **Node.js** | `26.13.1` |
 | **Claude Code** | `2.1.323` |
 | **Claude Agent SDK** | `0.3.323` |
 | **claude-adapter** | `2.2.1` |
@@ -229,13 +349,16 @@ Interrupted installations are resumed: staged files are kept and reused on the n
 ## Security & Privacy
 
 - Dashboard and adapter servers bind to `127.0.0.1` only.
+- Every session process gets `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` redirected into `data/`, so files it writes stay on the drive.
+- Claude Code needs Git Bash on Windows. An installed Git for Windows is used as-is; PortableGit is downloaded to `engine/git-win-x64/` only when none is found.
 - Plain HTTP is allowed only for loopback, RFC 1918 LAN, IPv6 ULA/link-local, and link-local `169.254.0.0/16` hosts — which includes the cloud metadata address `169.254.169.254`. Traffic and API keys to those endpoints are unencrypted; use HTTPS or a trusted network.
 - Dashboard APIs require a fresh access token printed at launch.
 - Provider credentials are excluded from normal bootstrap/configuration responses.
 - API keys are stored as plaintext in portable `data/settings.json`; protect the drive.
 - Uploaded attachments remain inside private per-session folders under `data/`.
 - Markdown is sanitized before rendering.
-- Unrestricted mode requires explicit confirmation.
+- Terminal launches run with bypass permissions ON by default, so commands and file writes execute without approval. Turn it off with `START.bat permissions off` / `./start.sh permissions off`, menu option 8, or `--safe` for a single launch — see [Permission Mode](#permission-mode-bypass-permissions).
+- The studio dashboard starts turns with the same stored mode; switching a single turn to Unrestricted in the composer requires typing `UNRESTRICTED`.
 - Prompts and relevant project content are sent to the provider you select.
 
 Official account login and subprocess tools may still use operating-system facilities. This project is portable for app-owned files, but it is not a guaranteed zero-footprint sandbox.
@@ -250,7 +373,7 @@ Official account login and subprocess tools may still use operating-system facil
 | **Linux** | Bash, `curl`, `tar`, glibc, and internet for first setup |
 | **macOS** | Bash, `curl`, `tar`, and internet for first setup |
 
-Git is useful for agent-driven repository operations. Alpine/musl Linux is not supported by the bundled Node.js bootstrap.
+On Windows, Claude Code's shell tool needs Git Bash. An installed Git for Windows is detected automatically; PortableGit is downloaded into `engine/git-win-x64/` only when none is found. Alpine/musl Linux is not supported by the bundled Node.js bootstrap.
 
 ---
 
@@ -258,6 +381,9 @@ Git is useful for agent-driven repository operations. Alpine/musl Linux is not s
 
 | Symptom | Fix |
 |---|---|
+| `Claude Code on Windows requires git-bash` | `START.bat` uses an installed Git for Windows and otherwise downloads PortableGit to `engine/git-win-x64/`. Run `START.bat` once with internet access, or install Git for Windows. |
+| Ollama responds very slowly | The speed proxy trims the system prompt automatically; check `data/logs/proxy.log` for the reduction. A smaller model (`gemma3:1b`) helps most on CPU-only hardware. |
+| `The local speed proxy did not start on port 11435` | Another process owns the port. Stop it, or set `PORTABLE_PROXY_PORT` before launching; the session runs untrimmed until the port is free. |
 | `Cannot create symlink ... Operation not permitted` on Linux USB | Pull the latest version and start again. NTFS/link-free mode is detected automatically. |
 | `Cannot read properties of undefined (reading 'spec')` on Windows | Pull the latest version. Runtime installation now uses `--save=false`. |
 | `Error: claude native binary not installed` on a pen drive | Pull the latest version and run option 5 (repair). The installer now detects the leftover placeholder and copies the native binary without hardlinks, which FAT32/exFAT drives block. |
@@ -265,6 +391,7 @@ Git is useful for agent-driven repository operations. Alpine/musl Linux is not s
 | Launcher window closes immediately on a startup error | Pull the latest version. `START.bat` now pauses on failure so the message stays visible; set `PORTABLE_AI_NO_PAUSE` to skip the pause. |
 | Folder picker opens behind the browser on Windows | Pull the latest version. The picker now opens as a topmost dialog and passes the selected folder correctly. |
 | `Extended thinking is unavailable through the local protocol adapter` | Pull the latest version. Adapter-backed providers now disable extended thinking automatically. |
+| `Unsupported content: tool_reference` | Pull the latest version. Claude Code's tool search references deferred tools in a block that only Anthropic's API understands; the adapters now skip it, because every tool schema is forwarded anyway. |
 | `Invalid session ID` after using terminal mode on Windows | Pull the latest version. Windows Claude history paths are now parsed correctly. |
 | Runtime installation was interrupted | Run option 5 or `start.sh install` again. Staged files are reused and the previous verified runtime is preserved; details are logged to `data/logs/runtime-install.log`. |
 | Dashboard says disconnected | Use the newest tokenized URL printed by the currently running launcher. |

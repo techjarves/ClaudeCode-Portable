@@ -10,5 +10,5 @@
     "check": "node tools/check.mjs",
     "smoke": "node tests/runtime-smoke.mjs"
   },
-  "engines": { "node": ">=22" }
+  "engines": { "node": ">=26" }
 }
