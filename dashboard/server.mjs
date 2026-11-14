@@ -125,8 +125,15 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
       // Opens a local file or folder in the host's file manager. Paths only:
       // web links belong to the browser and never travel through here.
       if(url.pathname==='/api/open'&&req.method==='POST'){
-        const target=String(body.path||'').trim();
-        if(!target||target.length>4096)throw new Error('Invalid path');
+        const requested=String(body.path||'').trim();
+        if(!requested||requested.length>4096)throw new Error('Invalid path');
+        // `file:///D:/...` is documented as clickable, but it is a URL, not a
+        // path: isAbsolute() rejects it. Decoding it here also unescapes %20 and
+        // friends, and rejects anything that is not a file URL.
+        let target=requested;
+        if(/^file:/i.test(requested)){
+          try{target=fileURLToPath(requested);}catch{throw new Error('Invalid file URL');}
+        }
         if(!isAbsolute(target))throw new Error('Only absolute local paths can be opened');
         if(!existsSync(target))throw new Error('That path does not exist');
         await openLocalPath(target);

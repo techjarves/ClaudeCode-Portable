@@ -13,7 +13,12 @@ if /i "%PROCESSOR_ARCHITEW6432%"=="ARM64" set "ARCH=arm64"
 
 set "NODE_EXE=%ROOT%engine\node-win32-%ARCH%\node.exe"
 set "CLAUDE_EXE=%ROOT%engine\win32-%ARCH%\current\node_modules\@anthropic-ai\claude-code-win32-%ARCH%\claude.exe"
-set "CONFIG_FILE=%ROOT%data\settings.json"
+
+REM lib/paths.mjs lets PORTABLE_AI_DATA_DIR move the data folder, so the preflight
+REM has to look where the runtime actually reads its settings from.
+set "DATA_DIR=%PORTABLE_AI_DATA_DIR%"
+if "%DATA_DIR%"=="" set "DATA_DIR=%ROOT%data"
+set "CONFIG_FILE=%DATA_DIR%\settings.json"
 
 if not exist "%NODE_EXE%" (
     echo [ERROR] Portable Node.js was not found: %NODE_EXE%
