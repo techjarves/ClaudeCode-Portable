@@ -23,6 +23,8 @@ test('all nine providers and safe configuration round trips',()=>{
   saveProfile({...profile,key:undefined,model:'next'});assert.equal(readConfig().profiles.custom.key,profile.key);saveProfile(profile);
   assert.equal(redact(`value ${profile.key}`),'value [REDACTED]');
   assert.throws(()=>validateBaseURL('http://remote.example/v1'),/HTTPS/);assert.throws(()=>validateBaseURL('https://key:secret@example.com'),/without credentials/);
+  for(const lan of ['http://192.168.137.37:1234','http://10.0.0.5:1234','http://172.16.0.1:1234','http://127.0.0.2:1234','http://[fd00::1]:1234','http://[fe80::1]:1234'])assert.equal(validateBaseURL(lan),lan);
+  for(const remote of ['http://8.8.8.8:1234','http://172.32.0.1','http://192.169.0.1','http://[2001:db8::1]','http://10.0.0.5.nip.io:1234'])assert.throws(()=>validateBaseURL(remote),/HTTPS/);
   saveProfile({provider:'openrouter',model:'free-test',auth:'api',baseUrl:'https://openrouter.ai/api/v1',key:'fixture-key'});assert.equal(readConfig().profiles.openrouter.baseUrl,'https://openrouter.ai/api');
   assert.equal(activateProfile('openrouter').active,'openrouter');assert.throws(()=>activateProfile('gemini'),/Configure/);saveProfile(profile);
 });
