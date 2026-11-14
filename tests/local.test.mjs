@@ -11,7 +11,7 @@ const { resolveGitBash, gitEnvironment, bundledGitBash, hostGitConfigPath } = aw
 const { portableEnvironment, providerEnvironment } = await import('../lib/providers.mjs');
 const { trimSystemPrompt, trimAnthropicBody, trimOpenAIBody, createProxyServer } = await import('../tools/local-proxy.mjs');
 const { prepareLocalSession } = await import('../lib/local-session.mjs');
-const { proxyStatus, ollamaUpstream } = await import('../lib/local-models.mjs');
+const { proxyStatus, ollamaUpstream, localStatus } = await import('../lib/local-models.mjs');
 const { PLAYWRIGHT_BROWSERS_DIR } = await import('../lib/playwright.mjs');
 
 test.after(() => rmSync(temp, { recursive: true, force: true }));
@@ -30,7 +30,10 @@ test('git detection prefers the explicit path, then the bundled copy, then the s
   assert.equal(resolveGitBash({ exists, env: {}, platform: 'linux', findExecutable: () => '' }), null);
 });
 
-test('git detection derives bash from a system git.exe on PATH', () => {
+// The candidate list is built with the host's path module because this is a
+// Windows-only code path; the simulated win32 platform cannot be exercised on
+// a POSIX host (dirname('C:\\x\\git.exe') is "." there).
+test('git detection derives bash from a system git.exe on PATH', { skip: process.platform !== 'win32' && 'Windows path layout only' }, () => {
   const gitExe = 'C:\\Tools\\Git\\ucrt64\\bin\\git.exe';
   const bash = 'C:\\Tools\\Git\\bin\\bash.exe';
   const found = resolveGitBash({
@@ -126,7 +129,9 @@ test('a provider environment redirects host folders and keeps host credentials o
     { parent: { HOME: 'C:\\Users\\someone', APPDATA: 'C:\\Users\\someone\\AppData\\Roaming', ANTHROPIC_API_KEY: 'leak', PATH: 'C:\\Windows' } },
   );
   assert.equal(env.HOME, join(temp, 'data', 'home'));
-  assert.notEqual(env.APPDATA, 'C:\\Users\\someone\\AppData\\Roaming');
+  // APPDATA is Windows-only: redirected there, untouched elsewhere.
+  if (process.platform === 'win32') assert.notEqual(env.APPDATA, 'C:\\Users\\someone\\AppData\\Roaming');
+  else assert.equal(env.APPDATA, 'C:\\Users\\someone\\AppData\\Roaming');
   assert.notEqual(env.ANTHROPIC_API_KEY, 'leak');
   assert.equal(env.ANTHROPIC_BASE_URL, 'https://api.deepseek.com/anthropic');
 });
@@ -286,8 +291,34 @@ test('ollamaUpstream keeps the scheme and defaults the port', () => {
   // HTTPS must survive: the proxy would otherwise send plaintext to a TLS listener.
   assert.deepEqual(ollamaUpstream('https://box'), { host: 'box', port: 443, secure: true, url: 'https://box:443' });
   assert.deepEqual(ollamaUpstream('https://box:8443/v1'), { host: 'box', port: 8443, secure: true, url: 'https://box:8443' });
+  // An IPv6 literal keeps its brackets in the URL but not in the request
+  // hostname; node:http resolves "[::1]" to nothing.
+  assert.deepEqual(ollamaUpstream('http://[::1]:11434'), { host: '::1', port: 11434, secure: false, url: 'http://[::1]:11434' });
+  assert.deepEqual(ollamaUpstream('https://[fd00::1]/v1'), { host: 'fd00::1', port: 443, secure: true, url: 'https://[fd00::1]:443' });
   assert.equal(ollamaUpstream('not a url'), null);
   assert.equal(ollamaUpstream(''), null);
+});
+
+test('the proxy reaches an IPv6 upstream and brackets it in /health', async t => {
+  const upstream = createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ via: 'ipv6', path: req.url }));
+  });
+  try {
+    await new Promise((resolve, reject) => { upstream.once('error', reject); upstream.listen(0, '::1', resolve); });
+  } catch {
+    t.skip('IPv6 loopback not available');
+    return;
+  }
+  const proxy = createProxyServer({ upstreamHost: '::1', upstreamPort: upstream.address().port });
+  await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+  t.after(() => { proxy.close(); upstream.close(); });
+  const base = `http://127.0.0.1:${proxy.address().port}`;
+
+  const health = await (await fetch(`${base}/health`)).json();
+  assert.equal(health.upstream, `http://[::1]:${upstream.address().port}`);
+  const res = await fetch(`${base}/v1/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [] }) });
+  assert.equal((await res.json()).via, 'ipv6', 'a bracketed hostname would never reach the server');
 });
 
 test('an HTTPS profile reaches the proxy as HTTPS', async () => {
@@ -320,6 +351,23 @@ test('a foreign service on the proxy port is not adopted', async () => {
   } finally {
     await Promise.all([foreign, other, wrongUpstream].map(s => new Promise(r => s.close(r))));
   }
+});
+
+test('a foreign service on the Ollama port is not treated as Ollama', async t => {
+  // A JSON 200 with no `models` array used to mark Ollama online, so the
+  // bundled server was never started and every turn went to the stranger.
+  const foreign = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{}'); });
+  const real = createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ models: [{ name: 'llama3', size: 42 }] }));
+  });
+  await Promise.all([foreign, real].map(s => new Promise(r => s.listen(0, '127.0.0.1', r))));
+  t.after(() => Promise.all([foreign, real].map(s => new Promise(r => s.close(r)))));
+  const tags = s => `http://127.0.0.1:${s.address().port}/api/tags`;
+  assert.equal((await localStatus({ tagsUrl: tags(foreign) })).online, false);
+  const status = await localStatus({ tagsUrl: tags(real) });
+  assert.equal(status.online, true);
+  assert.deepEqual(status.models, [{ name: 'llama3', size: 42 }]);
 });
 
 test('an external server or a failed proxy never blocks the session', async () => {

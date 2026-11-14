@@ -158,7 +158,7 @@ Extra arguments after `cli` or `resume` are forwarded to the official Claude Cod
 .\START.bat cli --permission-mode acceptEdits
 ```
 
-The model always comes from the active provider profile. Two launcher-only switches override the stored permission mode for a single launch and are not forwarded: `--safe` (approvals on) and `--unrestricted` (approvals off) — see [Permission Mode](#permission-mode-bypass-permissions).
+The model always comes from the active provider profile. Two launcher-only switches override the stored permission mode for a single launch and are not forwarded: `--safe` (approvals on) and `--unrestricted` (approvals off) — see [Permission Mode](#permission-mode-bypass-permissions). A `--permission-mode` you pass yourself also takes precedence over the stored default, and the launcher then adds no bypass flag of its own; `--unrestricted` cannot be combined with it.
 
 ### Environment Variables
 

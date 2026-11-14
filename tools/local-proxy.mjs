@@ -79,8 +79,16 @@ function trimRequest(pathname, rawBody) {
   return { body: rawBody, saved: 0 };
 }
 
+// An IPv6 literal needs brackets in a URL and in a Host header, but node:http
+// wants it bare in `hostname` ("[::1]" is an ENOTFOUND).
+const bareHost = host => (host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host);
+const authorityFor = (host, port) => {
+  const bare = bareHost(host);
+  return `${bare.includes(':') ? `[${bare}]` : bare}:${port}`;
+};
+
 export function createProxyServer({ upstreamHost = OLLAMA_HOST, upstreamPort = OLLAMA_PORT, upstreamSecure = OLLAMA_SECURE, maxChars = MAX_SYSTEM_CHARS } = {}) {
-  const upstreamUrl = `${upstreamSecure ? 'https' : 'http'}://${upstreamHost}:${upstreamPort}`;
+  const upstreamUrl = `${upstreamSecure ? 'https' : 'http'}://${authorityFor(upstreamHost, upstreamPort)}`;
   return createServer((req, res) => {
     if (req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -105,11 +113,11 @@ export function createProxyServer({ upstreamHost = OLLAMA_HOST, upstreamPort = O
         }
       }
       const upstream = (upstreamSecure ? httpsRequest : httpRequest)({
-        hostname: upstreamHost,
+        hostname: bareHost(upstreamHost),
         port: upstreamPort,
         path: req.url,
         method: req.method,
-        headers: { ...req.headers, host: `${upstreamHost}:${upstreamPort}`, 'content-length': payload.length },
+        headers: { ...req.headers, host: authorityFor(upstreamHost, upstreamPort), 'content-length': payload.length },
       }, upstreamRes => {
         res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
         upstreamRes.pipe(res, { end: true });

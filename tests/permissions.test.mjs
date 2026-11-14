@@ -51,6 +51,24 @@ test('resolves the launch flags from preference, --safe and --unrestricted', () 
   assert.equal(hasExplicitBypass(['--permission-mode=acceptEdits']), false);
 });
 
+test('an explicit --permission-mode overrides the stored bypass default', () => {
+  // README documents `START.bat cli --permission-mode acceptEdits`. Appending
+  // --dangerously-skip-permissions would hand Claude Code two contradicting
+  // modes and could run unrestricted instead of edit-only.
+  const separate = resolvePermissionFlags(['--permission-mode', 'acceptEdits'], { bypass: true });
+  assert.deepEqual(separate, { args: ['--permission-mode', 'acceptEdits'], bypass: false, explicit: false });
+  const inline = resolvePermissionFlags(['--permission-mode=plan'], { bypass: true });
+  assert.deepEqual(inline, { args: ['--permission-mode=plan'], bypass: false, explicit: false });
+  // Nothing to suppress when the preference is already off.
+  assert.deepEqual(resolvePermissionFlags(['--permission-mode', 'acceptEdits'], { bypass: false }).args, ['--permission-mode', 'acceptEdits']);
+  // Contradicting the one-off opt-in is an error, not a silent widening.
+  assert.throws(() => resolvePermissionFlags(['--permission-mode=acceptEdits', '--unrestricted']), /Cannot combine/);
+  // An explicit bypass mode still requires the UNRESTRICTED confirmation.
+  const bypass = resolvePermissionFlags(['--permission-mode=bypassPermissions'], { bypass: false });
+  assert.deepEqual(bypass.args, ['--permission-mode=bypassPermissions']);
+  assert.equal(bypass.explicit, true);
+});
+
 test('rejects contradictory permission flags', () => {
   assert.throws(() => resolvePermissionFlags([], { safe: true, forceOn: true }), /Cannot combine/);
   assert.throws(() => resolvePermissionFlags(['--dangerously-skip-permissions'], { safe: true }), /Cannot combine/);

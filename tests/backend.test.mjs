@@ -114,8 +114,10 @@ test('dashboard blocks unauthenticated, cross-origin and rebinding requests',asy
   const open=async path=>{const r=await fetch(`${app.origin}/api/open`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({path})});return {status:r.status,error:(await r.json()).error};};
   const fileUrl=await open('file:///D:/portable-does-not-exist/never.txt');
   assert.equal(fileUrl.status,400);assert.equal(fileUrl.error,'That path does not exist');
-  // A file URL with a host is a UNC path, not a rejection.
-  assert.equal((await open('file://portable-nowhere/share/x.txt')).error,'That path does not exist');
+  // A file URL with a host is a UNC path only on Windows; elsewhere the URL
+  // itself is not a local file and is rejected as invalid.
+  const unc=await open('file://portable-nowhere/share/x.txt');
+  assert.equal(unc.error,process.platform==='win32'?'That path does not exist':'Invalid file URL');
   assert.equal((await open('file:')).error,'Invalid file URL');
   assert.equal((await open('relative.txt')).error,'Only absolute local paths can be opened');
   assert.equal((await open('')).error,'Invalid path');
@@ -326,6 +328,35 @@ test('a managed model picker keeps the options the user already had',()=>{
   assert.equal(again.modelPicker.options.length,2);
   // A picker without options is left as it was apart from our entry.
   assert.deepEqual(mergeProfileSettings({modelPicker:{foo:1}},wanted).modelPicker,{foo:1,options:[mine]});
+});
+test('a managed model picker is withdrawn when the profile no longer qualifies',()=>{
+  const parent={HOME:'/unchanged',PATH:'/bin'};const adapter={url:'http://127.0.0.1:1',token:'local-token'};
+  const directory=join(temp,'data/claude/openai-api');const settingsFile=join(directory,'settings.json');
+  mkdirSync(directory,{recursive:true});
+  const existing={theme:'dark',modelPicker:{foo:1,options:[{model:'other',behavesAs:'claude-haiku-5-5'}]}};
+  writeFileSync(settingsFile,JSON.stringify(existing));
+  const declared={provider:'openai',auth:'api',model:'my-model',baseUrl:PROVIDERS.openai.baseUrl,key:'k',contextWindow:1000000};
+  providerEnvironment(declared,{adapter,parent});
+  assert.deepEqual(JSON.parse(readFileSync(settingsFile,'utf8')).modelPicker.options.map(o=>o.model),['other','my-model']);
+  // Lowering the window must remove our entry: otherwise Claude Code keeps
+  // mapping the ID to the native 1M row and ignores the declared window.
+  providerEnvironment({...declared,contextWindow:128000},{adapter,parent});
+  assert.deepEqual(JSON.parse(readFileSync(settingsFile,'utf8')),existing);
+  // A container that existed only for our entry disappears with it.
+  const clean=join(temp,'data/claude/gemini-api');const cleanFile=join(clean,'settings.json');
+  mkdirSync(clean,{recursive:true});writeFileSync(cleanFile,JSON.stringify({theme:'light'}));
+  const gemini={provider:'gemini',auth:'api',model:'gemini-model',baseUrl:PROVIDERS.gemini.baseUrl,key:'k',contextWindow:1000000};
+  providerEnvironment(gemini,{adapter,parent});
+  providerEnvironment({...gemini,contextWindow:128000},{adapter,parent});
+  assert.deepEqual(JSON.parse(readFileSync(cleanFile,'utf8')),{theme:'light'});
+});
+test('a malformed profile settings file is never overwritten',()=>{
+  const parent={HOME:'/unchanged',PATH:'/bin'};const adapter={url:'http://127.0.0.1:1',token:'local-token'};
+  const directory=join(temp,'data/claude/deepseek-api');const settingsFile=join(directory,'settings.json');
+  mkdirSync(directory,{recursive:true});writeFileSync(settingsFile,'{ this is not json');
+  providerEnvironment({provider:'deepseek',auth:'api',model:'m',baseUrl:'https://api.deepseek.com/anthropic',key:'k',contextWindow:1000000},{adapter,parent});
+  // Resetting to {} would discard every setting that failed to parse.
+  assert.equal(readFileSync(settingsFile,'utf8'),'{ this is not json');
 });
 
 test('the studio turn follows the stored bypass-permissions default',async t=>{
