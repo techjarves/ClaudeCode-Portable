@@ -253,6 +253,9 @@ test('the proxy forwards requests upstream after trimming and answers /health', 
 
   const health = await fetch(`${base}/health`).then(r => r.json());
   assert.equal(health.ok, true);
+  // The pid identifies the listener, which is how a launch decides whether the
+  // proxy answering on the port is the child it spawned or the winner of a race.
+  assert.equal(health.pid, process.pid);
 
   const payload = JSON.stringify({ system: longPrompt, messages: [{ role: 'user', content: 'hi' }] });
   const forwarded = await new Promise((resolve, reject) => {
@@ -497,12 +500,16 @@ test('a lock left behind by a killed process is broken', () => {
   const file = join(temp, 'consumers-stale-lock.json');
   const lock = `${file}.lock`;
   mkdirSync(dirname(file), { recursive: true });
-  // A pid that is certainly not running, plus an old mtime.
-  writeFileSync(lock, JSON.stringify({ pid: 999_999, since: Date.now() - 60_000 }));
-  const past = new Date(Date.now() - 60_000);
+  // A pid that is certainly not running, plus a mtime two seconds old. That age
+  // is above staleMs (750 ms) but below maxAgeMs (15 s), so the test only
+  // passes when a dead owner uses the short threshold: a live owner with the
+  // same age must be waited for (see the test above), and a dead one must not
+  // get the benefit of the doubt.
+  writeFileSync(lock, JSON.stringify({ pid: 999_999, since: Date.now() - 2000 }));
+  const past = new Date(Date.now() - 2000);
   utimesSync(lock, past, past);
   const started = Date.now();
-  registerLocalConsumer('proxy', { pid: 43001, file, alive: () => true });
+  registerLocalConsumer('proxy', { pid: 43001, file, alive: pid => pid !== 999_999 });
   // Well under the 1500 ms timeout: a lock that is only waited out would also
   // write the registry, so the duration is what proves it was broken.
   const elapsed = Date.now() - started;
@@ -522,36 +529,44 @@ test('a consumer that died without cleanup is pruned', () => {
   assert.equal(result.childPid, 52001, 'the recorded process is still reported');
 });
 
-test('the readiness poll verifies the requested upstream and stops on a dead child', async () => {
+test('the readiness poll adopts a winner that answers after our child died', async () => {
   // Two launches may point at different Ollama servers using the same proxy
-  // port. The second spawns, loses the bind, and its child exits; the poll must
-  // then fail instead of adopting the first launch's proxy.
-  const dead = { exitCode: 1 };
+  // port. The second spawns, loses the bind and its child exits - but the
+  // winner may answer only afterwards. Giving up at the exit would leave this
+  // session unregistered, so the last consumer would stop the shared proxy.
   const seen = [];
-  const rejecting = async ({ upstream }) => { seen.push(upstream); return false; };
-  const started = Date.now();
-  assert.equal(await waitForProxy(5000, { upstream: 'http://10.0.0.9:11434', child: dead, status: rejecting, pollMs: 5 }), false);
-  assert.ok(Date.now() - started < 1000, 'an exited child ends the poll instead of waiting out the timeout');
-  assert.deepEqual(seen, ['http://10.0.0.9:11434'], 'the poll checks the upstream this profile asked for');
+  let calls = 0;
+  // Silent for the first polls (as during a cold start), then the winner answers.
+  const late = async ({ upstream }) => { seen.push(upstream); return ++calls > 3 ? { ok: true, upstream, pid: 4242 } : null; };
+  const outcome = await waitForProxy(5000, { upstream: 'http://10.0.0.9:11434', child: { exitCode: 1 }, status: late, pollMs: 5 });
+  assert.deepEqual(outcome, { ready: true, ours: false }, 'the winner is adopted, not claimed');
+  assert.ok(seen.every(u => u === 'http://10.0.0.9:11434'), 'the poll checks the upstream this profile asked for');
 
-  // A proxy that does answer for that upstream is still accepted.
-  const accepting = async ({ upstream }) => upstream === 'http://10.0.0.9:11434';
-  assert.equal(await waitForProxy(1000, { upstream: 'http://10.0.0.9:11434', child: dead, status: accepting, pollMs: 5 }), true);
+  // Nobody ever answers and our child is gone: give up after the adoption
+  // window instead of waiting out the full timeout.
+  const started = Date.now();
+  const silent = async () => null;
+  await assert.doesNotReject(async () => {
+    assert.equal((await waitForProxy(5000, { upstream: 'http://10.0.0.9:11434', child: { exitCode: 1 }, status: silent, pollMs: 5, adoptionWindowMs: 100 })).ready, false);
+  });
+  assert.ok(Date.now() - started < 1500, 'the dead child ends the wait early');
 });
 
-test('a launch that lost the port does not record its dead child as the owner', async () => {
+test('a launch that lost the port does not take over the winner', async () => {
   // Two launches race for the same server: the loser exits on EADDRINUSE while
-  // the winner answers health for the very same upstream. Health cannot tell
-  // them apart, so only a still-running child may be recorded - otherwise the
-  // healthy process loses its owner and survives every session as an orphan.
+  // the winner answers for the very same upstream. Health alone cannot tell
+  // them apart, and a still-starting loser is alive while the winner already
+  // answers - so ownership must come from identity, not from "our child lives".
   // startLocal/startProxy write to the module's registry, which lives under the
   // test data directory.
   const file = join(process.env.PORTABLE_AI_DATA_DIR, 'run', 'local-consumers.json');
+  const registry = () => JSON.parse(readFileSync(file, 'utf8'));
   rmSync(file, { force: true });
-  const spawnDead = () => {
+
+  const fakeChild = (exitCode) => {
     const child = new EventEmitter();
     child.pid = 999_998;
-    child.exitCode = 1; // lost the bind before the first poll
+    child.exitCode = exitCode;
     child.kill = () => {};
     return child;
   };
@@ -561,20 +576,65 @@ test('a launch that lost the port does not record its dead child as the owner', 
     return async () => (++calls === 1 ? { online: false } : { online });
   };
 
-  const server = await startLocal({ spawnImpl: spawnDead, status: readyAfterSpawn(true), timeoutMs: 200, executable: join(temp, 'ollama-fixture') });
+  // Dead before the first poll.
+  const server = await startLocal({ spawnImpl: () => fakeChild(1), status: readyAfterSpawn(true), timeoutMs: 300, executable: join(temp, 'ollama-fixture') });
   assert.deepEqual(server, { alreadyRunning: true }, 'the winner\'s server is used');
-  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).owners, {}, 'no dead pid is recorded for the server');
+  assert.deepEqual(registry().owners, {}, 'no dead pid is recorded for the server');
+  assert.equal(registry().consumers.length, 1, 'the adopting session is still a consumer');
 
   rmSync(file, { force: true });
+  // The proxy names its pid, so a live child that is not the listener is
+  // rejected outright - the case a liveness check cannot see.
   let proxyCalls = 0;
   const proxy = await startProxy({
-    spawnImpl: spawnDead,
-    status: async () => ++proxyCalls > 1,
+    spawnImpl: () => fakeChild(null),
+    health: async () => { ++proxyCalls; return proxyCalls === 1 ? null : { ok: true, upstream: 'http://127.0.0.1:11434', pid: 4242 }; },
     upstream: { host: '127.0.0.1', port: 11434, secure: false, url: 'http://127.0.0.1:11434' },
-    timeoutMs: 200,
+    timeoutMs: 300,
   });
   assert.equal(proxy.alreadyRunning, true, 'the running proxy is adopted');
-  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).owners, {}, 'no dead pid is recorded for the proxy');
+  assert.deepEqual(registry().owners, {}, 'a live child that is not the listener is not recorded');
+  assert.equal(registry().consumers.length, 1, 'the adopting session is counted');
+});
+
+test('a successful start records its own child as the owner', async () => {
+  // Nothing else covers the claim path: without this, dropping childPid from the
+  // registration would go unnoticed.
+  const file = join(process.env.PORTABLE_AI_DATA_DIR, 'run', 'local-consumers.json');
+  rmSync(file, { force: true });
+  const child = new EventEmitter();
+  child.pid = 999_997;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = () => {};
+  let calls = 0;
+  const proxy = await startProxy({
+    spawnImpl: () => child,
+    health: async () => (++calls === 1 ? null : { ok: true, upstream: 'http://127.0.0.1:11434', pid: 999_997 }),
+    upstream: { host: '127.0.0.1', port: 11434, secure: false, url: 'http://127.0.0.1:11434' },
+    timeoutMs: 500,
+  });
+  assert.deepEqual(proxy, { started: true, url: 'http://127.0.0.1:11435' });
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).owners, { proxy: 999_997 });
+
+  // The server has no pid in its health answer, so a child that stays alive
+  // across the grace window is taken as the listener.
+  rmSync(file, { force: true });
+  const server = new EventEmitter();
+  server.pid = 999_996;
+  server.exitCode = null;
+  server.signalCode = null;
+  server.kill = () => {};
+  let polls = 0;
+  const started = await startLocal({
+    spawnImpl: () => server,
+    status: async () => (++polls === 1 ? { online: false } : { online: true }),
+    executable: join(temp, 'ollama-fixture'),
+    graceMs: 20,
+    timeoutMs: 1000,
+  });
+  assert.deepEqual(started, { starting: true });
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).owners, { server: 999_996 });
 });
 
 test('a foreign service on the Ollama port is not treated as Ollama', async t => {

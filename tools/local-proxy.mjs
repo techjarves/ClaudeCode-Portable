@@ -92,7 +92,10 @@ export function createProxyServer({ upstreamHost = OLLAMA_HOST, upstreamPort = O
   return createServer((req, res) => {
     if (req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, upstream: upstreamUrl }));
+      // The pid identifies this listener. Two launches can share the port for
+      // the same upstream, so an answer alone cannot tell whether the process
+      // that owns the port is the child a caller just spawned.
+      return res.end(JSON.stringify({ ok: true, upstream: upstreamUrl, pid: process.pid }));
     }
     const chunks = [];
     req.on('data', chunk => chunks.push(chunk));
