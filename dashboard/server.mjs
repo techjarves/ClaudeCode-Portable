@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync, appendFileSync, mkdirSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { join, extname, isAbsolute } from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { ROOT, DATA, RUNTIME, LOGS, CHAT_WORKSPACE } from '../lib/paths.mjs';
@@ -8,20 +8,23 @@ import { readConfig, publicConfig, saveProfile, activateProfile, redact, validat
 import { PROVIDERS, discoverModels, testConnection } from '../lib/providers.mjs';
 import { runtimeStatus, installRuntime, rollbackRuntime, listLogs } from '../lib/runtime.mjs';
 import { SessionStore } from '../lib/sessions.mjs';
+import { removeNativeSession } from '../lib/native-sessions.mjs';
 import { AgentManager } from '../lib/agent.mjs';
 import { externalAdapterAvailable } from '../lib/external-adapter.mjs';
 import { readBody, json } from '../lib/http.mjs';
+import { openLocalPath } from '../lib/open-path.mjs';
 import { localStatus, startLocal, stopLocal, pullModel } from '../lib/local-models.mjs';
 import { sessionTranscript } from '../lib/transcript.mjs';
 import { pickWorkspace } from '../lib/workspace-picker.mjs';
 import { removeAttachments, resolveAttachments, saveAttachments } from '../lib/attachments.mjs';
+import { defaultPermissionMode, resolveDashboardPermissions } from '../lib/permissions.mjs';
 
 export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||3000),store=new SessionStore(),manager,token=randomBytes(32).toString('hex'),workspacePicker=pickWorkspace,connectionTester=testConnection}={}) {
   store.recover(); manager ||= new AgentManager(store);
   mkdirSync(LOGS,{recursive:true});
   let origin; let maintenance=false; let restartRequired=false; const pulls=new Set();
   const staticFiles={
-    '/':'dashboard/index.html','/app.js':'dashboard/app.js','/requests.js':'dashboard/requests.js','/styles.css':'dashboard/styles.css','/icons.js':'dashboard/icons.js',
+    '/':'dashboard/index.html','/app.js':'dashboard/app.js','/composer.js':'dashboard/composer.js','/links.js':'dashboard/links.js','/requests.js':'dashboard/requests.js','/styles.css':'dashboard/styles.css','/icons.js':'dashboard/icons.js',
     '/vendor/marked.js':join(RUNTIME,'node_modules/marked/lib/marked.esm.js'),
     '/vendor/purify.js':join(RUNTIME,'node_modules/dompurify/dist/purify.es.mjs'),
     '/vendor/highlight.js':join(RUNTIME,'node_modules/@highlightjs/cdn-assets/es/highlight.min.js')
@@ -46,7 +49,7 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
       if(!['GET','POST','DELETE'].includes(req.method))return json(res,405,{error:'Method not allowed'});
       if(req.method==='POST'&&!req.headers['content-type']?.startsWith('application/json'))return json(res,415,{error:'JSON required'});
       const body=req.method==='POST'?await readBody(req,url.pathname.endsWith('/attachments')?28*1024*1024:4*1024*1024):{};
-      if(url.pathname==='/api/bootstrap'&&req.method==='GET'){const config=readConfig();store.syncNative(config,new Set(manager.runs.keys()));return json(res,200,{config:publicConfig(config),providers:PROVIDERS,adapterOptions:['builtin','external','responses'],externalAdapterAvailable:externalAdapterAvailable(),sessions:store.list(),runtime:await runtimeStatus(),workspace:ROOT,responseTimeoutMs:manager.responseTimeoutMs});}
+      if(url.pathname==='/api/bootstrap'&&req.method==='GET'){const config=readConfig();store.syncNative(config,new Set(manager.runs.keys()));return json(res,200,{config:publicConfig(config),providers:PROVIDERS,adapterOptions:['builtin','external','responses'],externalAdapterAvailable:externalAdapterAvailable(),sessions:store.list(),runtime:await runtimeStatus(),workspace:ROOT,responseTimeoutMs:manager.responseTimeoutMs,defaultPermissionMode:defaultPermissionMode(config)});}
       if(url.pathname==='/api/config'&&req.method==='GET')return json(res,200,publicConfig());
       if(url.pathname==='/api/config/key'&&req.method==='GET'){
         const provider=url.searchParams.get('provider');if(!PROVIDERS[provider])throw new Error('Unknown provider');
@@ -82,12 +85,14 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
         const projectless=body.projectless===true;if(projectless)mkdirSync(CHAT_WORKSPACE,{recursive:true,mode:0o700});
         return json(res,201,store.createConversation({workspace:projectless?CHAT_WORKSPACE:body.workspace,profile,trusted:body.trusted===true,projectless}));
       }
-      const match=url.pathname.match(/^\/api\/sessions\/([a-f0-9-]+)(?:\/(run|approve|cancel|events|attachments))?$/);
+      const match=url.pathname.match(/^\/api\/sessions\/([\w-]+)(?:\/(run|approve|cancel|events|attachments))?$/);
       if(match){
-        const [,id,action]=match;
+        const [,id,action]=match,sessionId=/^[a-f0-9-]{36}$/.test(id);
+        if(!action&&req.method==='DELETE'&&!sessionId){if(!store.deleteLegacy(id))return json(res,404,{error:'Session not found'});return json(res,200,{ok:true});}
+        if(!sessionId)return json(res,404,{error:'Session not found'});
         if(!store.get(id))return json(res,404,{error:'Session not found'});
         if(!action&&req.method==='GET'){const session=store.get(id);return json(res,200,{...session,transcript:sessionTranscript(session)});}
-        if(!action&&req.method==='DELETE'){if(manager.runs.has(id))throw new Error('Stop this session before deleting it');store.delete(id);removeAttachments(id);return json(res,200,{ok:true});}
+        if(!action&&req.method==='DELETE'){if(manager.runs.has(id))throw new Error('Stop this session before deleting it');removeNativeSession(store.get(id));store.delete(id);removeAttachments(id);return json(res,200,{ok:true});}
         if(action==='attachments'&&req.method==='POST')return json(res,201,{attachments:saveAttachments(id,body.files)});
         if(action==='approve'&&req.method==='POST'){manager.approve(id,body.requestId,body.approved===true,body.answers);return json(res,200,{ok:true});}
         if(action==='cancel'&&req.method==='POST'){await manager.cancel(id);return json(res,200,{ok:true});}
@@ -96,11 +101,17 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
           if(restartRequired)throw new Error('Runtime changed. Restart the studio to load the verified runtime and SDK together.');
           let send;const queue=[];const listener=e=>send?send(e):queue.push(e);
           let active;
-          if(action==='run')active=await manager.start(id,body.prompt,{...body,attachments:resolveAttachments(id,body.attachments)},listener);
+          if(action==='run'){
+            // Follow the stored bypass-permissions mode when the request does
+            // not choose one; an explicit choice keeps its own confirmation.
+            const permissions=resolveDashboardPermissions({permissionMode:body.permissionMode,confirmation:body.confirmation});
+            // Images are read here so the agent can send real image blocks.
+            active=await manager.start(id,body.prompt,{...body,...permissions,attachments:resolveAttachments(id,body.attachments,undefined,{withData:true})},listener);
+          }
           else{active=manager.runs.get(id);if(!active)return json(res,409,{error:'No active turn to reconnect'});active.listeners.add(listener);}
           res.writeHead(200,{'Content-Type':'text/event-stream','Connection':'keep-alive','Cache-Control':'no-store'});
           send=e=>res.write(`data: ${JSON.stringify(e)}\n\n`);queue.forEach(send);
-          if(action==='events')for(const e of store.get(id).events)if(e.type==='approval'&&active.approvals.has(e.requestId))send(e);
+          if(action==='events')for(const e of store.get(id)?.events||[])if(e.type==='approval'&&active.approvals.has(e.requestId))send(e);
           const heartbeat=setInterval(()=>res.write(': keepalive\n\n'),15000);
           res.on('close',()=>{clearInterval(heartbeat);active.listeners.delete(listener);});
           active.promise.finally(()=>{clearInterval(heartbeat);res.end();});return;
@@ -110,6 +121,23 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
       if(url.pathname==='/api/log'&&req.method==='GET'){
         const name=url.searchParams.get('name');if(!listLogs().includes(name))return json(res,404,{error:'Log not found'});
         return json(res,200,{text:redact(readFileSync(join(LOGS,name),'utf8').slice(-50000))});
+      }
+      // Opens a local file or folder in the host's file manager. Paths only:
+      // web links belong to the browser and never travel through here.
+      if(url.pathname==='/api/open'&&req.method==='POST'){
+        const requested=String(body.path||'').trim();
+        if(!requested||requested.length>4096)throw new Error('Invalid path');
+        // `file:///D:/...` is documented as clickable, but it is a URL, not a
+        // path: isAbsolute() rejects it. Decoding it here also unescapes %20 and
+        // friends, and rejects anything that is not a file URL.
+        let target=requested;
+        if(/^file:/i.test(requested)){
+          try{target=fileURLToPath(requested);}catch{throw new Error('Invalid file URL');}
+        }
+        if(!isAbsolute(target))throw new Error('Only absolute local paths can be opened');
+        if(!existsSync(target))throw new Error('That path does not exist');
+        await openLocalPath(target);
+        return json(res,200,{ok:true});
       }
       if(url.pathname==='/api/runtime'&&req.method==='POST'){
         if(manager.runs.size||maintenance)throw new Error('Stop active turns before runtime maintenance');

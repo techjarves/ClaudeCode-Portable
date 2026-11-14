@@ -3,6 +3,8 @@ import DOMPurify from '/vendor/purify.js';
 import hljs from '/vendor/highlight.js';
 import { icon, hydrateIcons } from '/icons.js';
 import { ComposerRequests } from '/requests.js';
+import { isComposerSubmitKey } from '/composer.js';
+import { linkifyElement } from '/links.js';
 
 const $=s=>document.querySelector(s);
 const $$=s=>[...document.querySelectorAll(s)];
@@ -69,6 +71,15 @@ function closePermissions(focus=false){$('#permission-menu').hidden=true;$('#per
 function openPermissions(){ $('#permission-menu').hidden=false;$('#permission-picker').setAttribute('aria-expanded','true');$('#permission-menu [aria-pressed="true"]').focus(); }
 $('#permission-picker').onclick=()=>$('#permission-menu').hidden?openPermissions():closePermissions(true);
 document.addEventListener('click',e=>{if(!e.target.closest('.permission-control'))closePermissions();});
+// Opening happens on the server: a browser may not launch a local file from an
+// http page, so the path goes back over the token-protected API.
+document.addEventListener('click',e=>{
+  const link=e.target.closest('[data-open-path]');
+  if(!link)return;
+  e.preventDefault();
+  const path=link.dataset.openPath;
+  api('/api/open',{path}).catch(error=>toast(error.message));
+});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#permission-menu').hidden){e.preventDefault();closePermissions(true);}});
 $('#permission-menu').addEventListener('focusout',e=>{if(!e.currentTarget.parentElement.contains(e.relatedTarget))closePermissions();});
 $('#permission-menu').onkeydown=e=>{const buttons=$$('[data-permission]'),i=buttons.indexOf(document.activeElement);if(['ArrowDown','ArrowUp','Home','End'].includes(e.key)){e.preventDefault();buttons[e.key==='Home'?0:e.key==='End'?buttons.length-1:(i+(e.key==='ArrowDown'?1:buttons.length-1))%buttons.length].focus();}};
@@ -119,6 +130,7 @@ function setPage(page){state.page=page;$$('.view').forEach(el=>el.hidden=el.id!=
 $$('[data-page]').forEach(el=>el.onclick=()=>setPage(el.dataset.page));$('.brand').addEventListener('click',e=>{if(e.target.closest('button'))return;e.preventDefault();setPage('studio');});
 $('#settings-launch').onclick=()=>setPage(state.page==='settings'?'studio':'settings');$('#settings-theme').onclick=toggleTheme;$('#theme-toggle').onclick=toggleTheme;
 $('#settings-providers').onclick=()=>setPage('providers');$('#settings-system').onclick=()=>setPage('system');$('#connection').onclick=()=>setPage('providers');
+$('#delete-conversation').onclick=()=>{if(state.current)deleteConversation(state.current.id);};
 $$('[data-back-settings]').forEach(button=>button.onclick=()=>setPage('settings'));
 function selectableProfiles(){return Object.entries(state.config.profiles||{}).filter(([id,p])=>state.providers[id]&&p.auth!=='login');}
 function renderModelSwitcher(){
@@ -149,11 +161,35 @@ function updateHeader(){
   $$('[data-permission]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.permission===state.permissionMode)));
   $('.composer-foot>span:first-child').innerHTML=icon(danger?'alert':'shield')+(state.running&&mode!==state.permissionMode?`Current turn: ${permissionNames[mode]}. Next: ${permissionNames[state.permissionMode]}.`:danger?'Unrestricted mode. Actions run without approval.':mode==='acceptEdits'?'File edits allowed. Other permission checks remain on.':'You stay in control. Approvals are on.');
   $('#settings-version').textContent=state.runtime.version||'Not installed';$('#health-runtime').textContent=state.runtime.installed?'Ready':'Not installed';renderModelSwitcher();renderContextMeter();
+  $('#delete-conversation').hidden=!state.current;
 }
+// The list is rebuilt from a string, so it must not be rewritten when nothing
+// changed: replacing the nodes between a mousedown and its mouseup swallows the
+// click, which is why a delete or a session switch occasionally needed a second
+// press. Every refresh first compares the markup and leaves the DOM alone when
+// it is identical.
+let sessionsMarkup=null,sessionPointerDown=false,sessionsRenderPending=false;
+// A press inside the list blocks re-rendering until it is released, so the
+// click that follows always lands on the element it started on.
+$('#session-list').addEventListener('mousedown',()=>{sessionPointerDown=true;},true);
+document.addEventListener('mouseup',()=>{
+  if(!sessionPointerDown)return;
+  sessionPointerDown=false;
+  // Runs after the click the release produces, never before it.
+  if(sessionsRenderPending){sessionsRenderPending=false;setTimeout(renderSessions,0);}
+},true);
+// A release outside the window never reaches the document, so the guard must
+// not stay set: the window losing focus ends the press for us.
+document.addEventListener('dragend',()=>{sessionPointerDown=false;},true);
+window.addEventListener('blur',()=>{
+  if(!sessionPointerDown)return;
+  sessionPointerDown=false;
+  if(sessionsRenderPending){sessionsRenderPending=false;renderSessions();}
+});
 function renderSessions(){
   const search=$('#session-search').value.toLowerCase(),sessions=[...state.sessions,...state.legacy].filter(s=>s.title.toLowerCase().includes(search));$('#session-count').textContent=state.sessions.length;
   const age=value=>{const seconds=Math.max(0,(Date.now()-new Date(value||0))/1000);return seconds<60?'now':seconds<3600?`${Math.floor(seconds/60)}m`:seconds<86400?`${Math.floor(seconds/3600)}h`:seconds<604800?`${Math.floor(seconds/86400)}d`:`${Math.floor(seconds/604800)}w`;};
-  const row=s=>`<div class="session-row ${state.current?.id===s.id?'current':''}"><button class="session-select" data-session="${escape(s.id)}" ${s.legacy?'data-legacy="true"':''} title="${escape(s.title)}"><span>${escape(s.title)}</span><time>${age(s.updated||s.created)}</time></button>${!s.legacy&&!s.nativeConversation?`<button class="icon-btn delete-session" data-delete="${escape(s.id)}" aria-label="Delete ${escape(s.title)}">${icon('trash')}</button>`:''}</div>`;
+  const row=s=>`<div class="session-row ${state.current?.id===s.id?'current':''}"><button class="session-select" data-session="${escape(s.id)}" ${s.legacy?'data-legacy="true"':''} title="${escape(s.title)}"><span>${escape(s.title)}</span><time>${age(s.updated||s.created)}</time></button><button class="icon-btn delete-session" data-delete="${escape(s.id)}" aria-label="Delete ${escape(s.title)}">${icon('trash')}</button></div>`;
   const recent=sessions.filter(s=>s.projectless||s.legacy),projects=new Map();for(const s of sessions.filter(s=>!s.projectless&&!s.legacy)){const key=s.workspace||'Unknown project';if(!projects.has(key))projects.set(key,[]);projects.get(key).push(s);}
   let html='';
   for(const [workspace,items] of projects){
@@ -161,12 +197,29 @@ function renderSessions(){
     html+=`<section class="sidebar-group project-group ${expanded?'expanded':'collapsed'}"><button type="button" class="project-heading" data-project-toggle="${escape(workspace)}" aria-expanded="${expanded}" title="${expanded?'Collapse':'Expand'} ${escape(shortPath(workspace))}">${icon('folder')}<strong>${escape(shortPath(workspace))}</strong><span class="project-count">${items.length}</span><span class="project-chevron">${icon('chevron')}</span></button><div class="project-conversations" ${expanded?'':'hidden'}>${items.map(row).join('')}</div></section>`;
   }
   if(recent.length)html+=`<section class="sidebar-group conversations-group"><div class="sidebar-group-title"><span>Conversations</span><span>${recent.length}</span></div>${recent.map(row).join('')}</section>`;
-  $('#session-list').innerHTML=html||`<p class="sidebar-empty">${search?'No matching conversations.':'Start a normal chat or open a project folder.'}</p>`;
-  $$('[data-session]').forEach(b=>b.onclick=()=>loadSession(b.dataset.session,!!b.dataset.legacy).catch(e=>toast(e.message)));
-  $$('[data-project-toggle]').forEach(b=>b.onclick=()=>{const workspace=b.dataset.projectToggle;if(state.expandedProjects.has(workspace))state.expandedProjects.delete(workspace);else state.expandedProjects.add(workspace);renderSessions();});
-  $$('[data-delete]').forEach(b=>b.onclick=async()=>{if(!await confirmAction('Delete session?','This removes its dashboard transcript. Runtime session files are retained.','Delete'))return;try{await api(`/api/sessions/${b.dataset.delete}`,null,'DELETE');if(state.current?.id===b.dataset.delete)resetSession();await refreshSessions();}catch(e){toast(e.message);}});
+  const markup=html||`<p class="sidebar-empty">${search?'No matching conversations.':'Start a normal chat or open a project folder.'}</p>`;
+  if(markup===sessionsMarkup)return;
+  // Replacing the rows while a mouse button is held down destroys the element
+  // the press started on, and the browser then never delivers the click. Wait
+  // until the press is finished instead of dropping the user's click.
+  if(sessionPointerDown){sessionsRenderPending=true;return;}
+  sessionsMarkup=markup;$('#session-list').innerHTML=markup;
 }
+// Delegated once: a rebuilt row can never leave a stale or missing handler
+// behind, and the handler always reads the id from the row that was clicked.
+$('#session-list').addEventListener('click',event=>{
+  const toggle=event.target.closest('[data-project-toggle]');
+  if(toggle){const workspace=toggle.dataset.projectToggle;if(state.expandedProjects.has(workspace))state.expandedProjects.delete(workspace);else state.expandedProjects.add(workspace);return renderSessions();}
+  const remove=event.target.closest('[data-delete]');
+  if(remove)return deleteConversation(remove.dataset.delete);
+  const select=event.target.closest('[data-session]');
+  if(select)loadSession(select.dataset.session,!!select.dataset.legacy).catch(e=>toast(e.message));
+});
 async function refreshSessions(){const data=await api('/api/sessions');state.sessions=data.sessions;state.legacy=data.legacy;const latest=state.sessions.find(s=>s.id===state.current?.id);if(latest){Object.assign(state.current,latest);if(state.page==='studio')$('#page-title').textContent=latest.title;}renderSessions();}
+async function deleteConversation(id){
+  if(!await confirmAction('Delete conversation?','This permanently removes the conversation and its Claude Code history.','Delete'))return;
+  try{await api(`/api/sessions/${encodeURIComponent(id)}`,null,'DELETE');if(state.current?.id===id)resetSession();await refreshSessions();toast('Conversation deleted.');}catch(e){toast(e.message);}
+}
 $('#session-search').oninput=renderSessions;
 function detachRunStream(){state.requestController?.abort();state.requestController=null;}
 function resetSession(){detachRunStream();state.current=null;state.attachments=[];renderAttachments();state.running=false;state.followOutput=true;state.durationNote=null;state.tools.clear();state.thinking.clear();state.seenEvents.clear();requests.clear();state.streaming=null;clearWaiting();$('#transcript').replaceChildren();$('#welcome').hidden=false;$('#activity-list').innerHTML=`<div class="activity-empty"><div class="activity-empty-icon">${icon('activity')}</div><strong>A clear view of every step</strong><p>Tool calls and results appear here.<br>Answer requests in your composer.</p></div>`;$('#activity-count').textContent='0';$('#usage-details').replaceChildren();$('#prompt').disabled=false;setRunStatus('idle');updateHeader();renderSessions();}
@@ -210,6 +263,8 @@ async function ensureSession(){
 }
 function renderMessageBody(body,text){
   body.innerHTML=DOMPurify.sanitize(marked.parse(text||''),{FORBID_TAGS:['style','iframe','form','input','button'],FORBID_ATTR:['style'],ALLOW_DATA_ATTR:false});
+  // Local paths in the reply become clickable; web links were already handled below.
+  linkifyElement(body);
   body.querySelectorAll('a').forEach(a=>{if(!/^https?:\/\//i.test(a.getAttribute('href')||''))a.removeAttribute('href');else{a.target='_blank';a.rel='noopener noreferrer';}});
   body.querySelectorAll('img').forEach(img=>{if(!/^data:image\/(png|jpeg|gif|webp);base64,/.test(img.getAttribute('src')||''))img.remove();});
   body.querySelectorAll('pre code').forEach(code=>{
@@ -299,7 +354,7 @@ function scrollConversation(force=false){
 $('#conversation').addEventListener('scroll',()=>{const box=$('#conversation');state.followOutput=box.scrollHeight-box.scrollTop-box.clientHeight<=48;},{passive:true});
 async function loadSession(id,legacy=false){
   if(!legacy&&state.current?.id===id){setPage('studio');scrollConversation(true);return;}
-  resetSession();const s=legacy?state.legacy.find(x=>x.id===id):await api(`/api/sessions/${id}`);state.current=s;state.lastRunDurationMs=Number(s.durationMs)||0;state.workspace=s.workspace||state.workspace;state.projectless=!!s.projectless;state.activePermissionMode=s.permissionMode||'default';
+  resetSession();const s=legacy?state.legacy.find(x=>x.id===id):await api(`/api/sessions/${id}`);state.current=s;state.lastRunDurationMs=Number(s.durationMs)||0;state.workspace=s.workspace||state.workspace;state.projectless=!!s.projectless;state.activePermissionMode=s.permissionMode||state.permissionMode;
   if(legacy)s.messages?.forEach(m=>addMessage(m.role,typeof m.content==='string'?m.content:pretty(m.content)));
   else for(const event of s.transcript||[])renderEvent(event,true);
   if(!['running','queued','awaiting_approval'].includes(s.status))requests.clear();
@@ -385,8 +440,10 @@ function renderEvent(event,replay=false,sessionId=state.current?.id){
       record.status=event.status;
       for(const el of [record.inspector,record.chat]){const status=el.querySelector('.tool-state,.chat-tool-state');status.textContent=event.status;status.className=status.classList.contains('tool-state')?'tool-state':'chat-tool-state';status.classList.add(event.status);}
       if(event.type==='tool_result'){
-        const out=document.createElement('pre');out.className='tool-output';out.textContent=pretty(event.output);record.inspector.append(out);
-        const result=record.chat.querySelector('.chat-tool-result');result.hidden=false;result.querySelector('pre').textContent=pretty(event.output);
+        const out=document.createElement('pre');out.className='tool-output';out.textContent=pretty(event.output);linkifyElement(out,document,{skip:'A, BUTTON, SCRIPT, STYLE'});record.inspector.append(out);
+        const result=record.chat.querySelector('.chat-tool-result');result.hidden=false;
+        // Paths in tool output are the ones a reader most wants to open.
+        const outputPre=result.querySelector('pre');outputPre.textContent=pretty(event.output);linkifyElement(outputPre,document,{skip:'A, BUTTON, SCRIPT, STYLE'});
       }
     }
   }
@@ -422,7 +479,10 @@ $('#composer').onsubmit=async e=>{
     await consumeRun(`/api/sessions/${sessionId}/run`,{prompt,attachments:uploaded.map(file=>file.id),permissionMode:state.permissionMode,...(state.permissionMode==='bypassPermissions'?{confirmation:'UNRESTRICTED'}:{})},sessionId);
   }catch(err){toast(err.message);}
 };
-$('#prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();$('#composer').requestSubmit();}});
+const prompt=$('#prompt');let promptIsComposing=false;
+prompt.addEventListener('compositionstart',()=>promptIsComposing=true);
+prompt.addEventListener('compositionend',()=>promptIsComposing=false);
+prompt.addEventListener('keydown',e=>{if(isComposerSubmitKey(e,promptIsComposing)){e.preventDefault();$('#composer').requestSubmit();}});
 $('#prompt').addEventListener('input',syncComposer);
 const formatBytes=size=>size>=1024*1024?`${(size/1024/1024).toFixed(1)} MB`:size>=1024?`${Math.ceil(size/1024)} KB`:`${size} B`;
 function renderAttachments(){
@@ -432,12 +492,52 @@ function renderAttachments(){
 }
 function fileBase64(file){return file.arrayBuffer().then(buffer=>{const bytes=new Uint8Array(buffer);let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(binary);});}
 async function uploadAttachments(){const files=await Promise.all(state.attachments.map(async file=>({name:file.name,type:file.type,data:await fileBase64(file)})));return (await api(`/api/sessions/${state.current.id}/attachments`,{files})).attachments;}
+const MAX_ATTACH_FILES=10,MAX_ATTACH_BYTES=10*1024*1024,MAX_IMAGE_BYTES=5*1024*1024,MAX_ATTACH_TOTAL=20*1024*1024;
+const isImageFile=file=>/^image\/(png|jpeg|gif|webp)$/.test(file.type||'');
+// A pasted screenshot arrives without a name, which the attachment list and the
+// server both need.
+function namedFile(file){
+  if(file.name)return file;
+  const extension=((file.type||'').split('/')[1]||'png').replace('jpeg','jpg').replace('svg+xml','svg');
+  return new File([file],`pasted-${new Date().toISOString().replace(/[:.]/g,'-')}.${extension}`,{type:file.type||'application/octet-stream',lastModified:Date.now()});
+}
+// Shared by the file picker, clipboard paste and drag and drop.
+function addFiles(incoming){
+  if(state.running||!!state.current?.legacy||requests.active){toast('Finish the current turn before attaching files.');return;}
+  const combined=[...state.attachments];
+  for(const raw of incoming){
+    const file=namedFile(raw),image=isImageFile(file),limit=image?MAX_IMAGE_BYTES:MAX_ATTACH_BYTES;
+    if(file.size>limit){toast(`${file.name} is larger than ${limit/1024/1024} MB.`);continue;}
+    if(combined.length>=MAX_ATTACH_FILES){toast(`You can attach up to ${MAX_ATTACH_FILES} files.`);break;}
+    if(!combined.some(saved=>saved.name===file.name&&saved.size===file.size&&saved.lastModified===file.lastModified))combined.push(file);
+  }
+  if(combined.reduce((sum,file)=>sum+file.size,0)>MAX_ATTACH_TOTAL){toast(`Attachments must total ${MAX_ATTACH_TOTAL/1024/1024} MB or less.`);return;}
+  state.attachments=combined;renderAttachments();
+}
 $('#attach-button').onclick=()=>$('#attachment-input').click();
 $('#attachment-input').onchange=()=>{
-  const incoming=[...$('#attachment-input').files],combined=[...state.attachments];$('#attachment-input').value='';
-  for(const file of incoming){if(file.size>10*1024*1024){toast(`${file.name} is larger than 10 MB.`);continue;}if(combined.length>=10){toast('You can attach up to 10 files.');break;}if(!combined.some(saved=>saved.name===file.name&&saved.size===file.size&&saved.lastModified===file.lastModified))combined.push(file);}
-  if(combined.reduce((sum,file)=>sum+file.size,0)>20*1024*1024){toast('Attachments must total 20 MB or less.');return;}state.attachments=combined;renderAttachments();
+  const incoming=[...$('#attachment-input').files];$('#attachment-input').value='';addFiles(incoming);
 };
+// Paste an image straight from the clipboard. Text pastes are left untouched.
+$('#prompt').addEventListener('paste',event=>{
+  const files=[...(event.clipboardData?.files||[])];
+  if(!files.length)return;
+  event.preventDefault();addFiles(files);
+});
+// Files can be dropped anywhere in the studio; the composer shows the state and
+// receives them. Dropping outside must never navigate away from the page.
+const hasFileDrag=event=>[...(event.dataTransfer?.types||[])].includes('Files');
+const composerElement=$('.composer');
+for(const type of ['dragenter','dragover'])window.addEventListener(type,event=>{
+  if(!hasFileDrag(event))return;
+  event.preventDefault();event.dataTransfer.dropEffect='copy';composerElement.classList.add('drop-target');
+});
+window.addEventListener('dragleave',event=>{if(hasFileDrag(event)&&!event.relatedTarget)composerElement.classList.remove('drop-target');});
+window.addEventListener('drop',event=>{
+  if(!hasFileDrag(event))return;
+  event.preventDefault();composerElement.classList.remove('drop-target');
+  const files=[...(event.dataTransfer?.files||[])];if(files.length)addFiles(files);
+});
 $('#stop').onclick=async()=>{try{await api(`/api/sessions/${state.current.id}/cancel`,{});}catch(e){toast(e.message);}};
 $$('[data-suggestion]').forEach(b=>b.onclick=()=>{$('#prompt').value=b.dataset.suggestion;$('#prompt').dispatchEvent(new Event('input'));$('#prompt').focus();});
 
@@ -490,6 +590,11 @@ for(const [id,action]of[['runtime-install','install'],['runtime-rollback','rollb
 
 async function init(){
   const data=await api('/api/bootstrap');Object.assign(state,{config:data.config,providers:data.providers,sessions:data.sessions,runtime:data.runtime,workspace:data.workspace,responseTimeoutMs:data.responseTimeoutMs||state.responseTimeoutMs});
+  // The studio follows the stored bypass-permissions mode, which defaults to
+  // ON. Change it permanently with START.bat permissions off, or per turn with
+  // the composer picker.
+  const defaultMode=data.defaultPermissionMode||(data.config.preferences?.bypassPermissions===false?'default':'bypassPermissions');
+  state.permissionMode=defaultMode;state.activePermissionMode=defaultMode;
   $('#health-connection').textContent='Connected';updateHeader();resetSession();renderProviders();await refreshSessions();$('#send').disabled=true;
 }
 init().catch(e=>{$('#connection').innerHTML='<span class="status-dot failed"></span>Disconnected';$('#health-connection').textContent='Disconnected';setRunStatus('failed',e.message);toast(e.message);});

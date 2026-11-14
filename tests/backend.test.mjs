@@ -6,14 +6,14 @@ import { join } from 'node:path';
 import { request } from 'node:http';
 const temp=mkdtempSync(join(tmpdir(),'portable-ai-tests-'));process.env.PORTABLE_AI_DATA_DIR=join(temp,'data');
 const { saveProfile,activateProfile,readConfig,publicConfig,redact,parseLegacy,migrateLegacy,validateBaseURL }=await import('../lib/config.mjs');
-const { PROVIDERS,providerEnvironment,testConnection }=await import('../lib/providers.mjs');
+const { PROVIDERS,providerEnvironment,profileSettings,mergeProfileSettings,testConnection }=await import('../lib/providers.mjs');
 const { SessionStore }=await import('../lib/sessions.mjs');
 const { AgentManager }=await import('../lib/agent.mjs');
 const { startDashboard }=await import('../dashboard/server.mjs');
 const { installRuntime,rollbackRuntime,manifest }=await import('../lib/runtime.mjs');
 const { sessionTranscript }=await import('../lib/transcript.mjs');
 const { pickWorkspace }=await import('../lib/workspace-picker.mjs');
-const { nativeSessionId }=await import('../lib/native-sessions.mjs');
+const { nativeSessionId, removeNativeSession }=await import('../lib/native-sessions.mjs');
 test.after(()=>rmSync(temp,{recursive:true,force:true}));
 const profile={provider:'custom',model:'test-model',auth:'api',baseUrl:'http://127.0.0.1:9099/v1',key:'test-secret-not-real'};
 test('all nine providers and safe configuration round trips',()=>{
@@ -23,6 +23,8 @@ test('all nine providers and safe configuration round trips',()=>{
   saveProfile({...profile,key:undefined,model:'next'});assert.equal(readConfig().profiles.custom.key,profile.key);saveProfile(profile);
   assert.equal(redact(`value ${profile.key}`),'value [REDACTED]');
   assert.throws(()=>validateBaseURL('http://remote.example/v1'),/HTTPS/);assert.throws(()=>validateBaseURL('https://key:secret@example.com'),/without credentials/);
+  for(const lan of ['http://192.168.137.37:1234','http://10.0.0.5:1234','http://172.16.0.1:1234','http://127.0.0.2:1234','http://[fd00::1]:1234','http://[fe80::1]:1234'])assert.equal(validateBaseURL(lan),lan);
+  for(const remote of ['http://8.8.8.8:1234','http://172.32.0.1','http://192.169.0.1','http://[2001:db8::1]','http://10.0.0.5.nip.io:1234'])assert.throws(()=>validateBaseURL(remote),/HTTPS/);
   saveProfile({provider:'openrouter',model:'free-test',auth:'api',baseUrl:'https://openrouter.ai/api/v1',key:'fixture-key'});assert.equal(readConfig().profiles.openrouter.baseUrl,'https://openrouter.ai/api');
   assert.equal(activateProfile('openrouter').active,'openrouter');assert.throws(()=>activateProfile('gemini'),/Configure/);saveProfile(profile);
 });
@@ -33,9 +35,26 @@ test('legacy config parsing handles CRLF and keeps equal signs',()=>{
 test('provider environments remove ambient credentials and pin all model roles',()=>{
   const parent={HOME:'/unchanged',PATH:'/bin',ANTHROPIC_API_KEY:'must-not-leak',ANTHROPIC_AUTH_TOKEN:'must-not-leak',CLAUDE_CODE_USE_OPENAI:'1',OPENAI_API_KEY:'must-not-leak',AWS_SECRET_ACCESS_KEY:'must-not-leak'};
   const env=providerEnvironment(profile,{adapter:{url:'http://127.0.0.1:1',token:'local-token'},parent});
-  assert.equal(env.HOME,'/unchanged');assert.equal(env.ANTHROPIC_AUTH_TOKEN,'local-token');assert.equal(env.OPENAI_API_KEY,undefined);assert.equal(env.AWS_SECRET_ACCESS_KEY,undefined);assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL,profile.model);
+  // HOME is redirected into the portable data folder instead of the host's.
+  assert.equal(env.HOME,join(process.env.PORTABLE_AI_DATA_DIR,'home'));assert.equal(env.ANTHROPIC_AUTH_TOKEN,'local-token');assert.equal(env.OPENAI_API_KEY,undefined);assert.equal(env.AWS_SECRET_ACCESS_KEY,undefined);assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL,profile.model);
   assert.throws(()=>providerEnvironment({provider:'openrouter',auth:'login',baseUrl:'https://openrouter.ai/api'},{}),/Subscription/);
   assert.throws(()=>providerEnvironment({provider:'anthropic',auth:'login'},{dashboard:true}),/terminal-only/);
+});
+test('unknown model IDs declare their context window and behaviour profile',()=>{
+  const parent={HOME:'/unchanged',PATH:'/bin'};
+  const adapter={url:'http://127.0.0.1:1',token:'local-token'};
+  const settingsFile=join(temp,'data/claude/custom-api/settings.json');
+  mkdirSync(join(temp,'data/claude/custom-api'),{recursive:true});writeFileSync(settingsFile,JSON.stringify({theme:'dark'}));
+  const declared={...profile,contextWindow:1000000};
+  const env=providerEnvironment(declared,{adapter,parent});
+  assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS,'1000000');
+  assert.deepEqual(profileSettings(declared),{modelPicker:{options:[{model:profile.model,behavesAs:'claude-sonnet-5-5'}]}});
+  const merged=JSON.parse(readFileSync(settingsFile,'utf8'));
+  assert.equal(merged.theme,'dark');assert.equal(merged.modelPicker.options[0].behavesAs,'claude-sonnet-5-5');
+  // A smaller declared window must stay authoritative, so no behavesAs row is added.
+  assert.equal(profileSettings({...profile,contextWindow:128000}),null);
+  assert.equal(providerEnvironment({...profile,contextWindow:128000},{adapter,parent}).CLAUDE_CODE_MAX_CONTEXT_TOKENS,'128000');
+  assert.equal(profileSettings({...profile,provider:'anthropic',contextWindow:1000000}),null);
 });
 test('connection test uses an authenticated provider endpoint and reports rejected keys',async()=>{
   let request;
@@ -87,13 +106,31 @@ test('dashboard blocks unauthenticated, cross-origin and rebinding requests',asy
   const keyResponse=await fetch(`${app.origin}/api/config/key?provider=custom`,{headers:{'X-Portable-Token':app.token}});assert.equal(keyResponse.status,200);assert.deepEqual(await keyResponse.json(),{key:'test-secret-not-real'});
   const switched=await fetch(`${app.origin}/api/config/active`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({provider:'openrouter'})});assert.equal(switched.status,200);assert.equal((await switched.json()).active,'openrouter');activateProfile('custom');
   const page=await fetch(app.origin);assert.match(page.headers.get('content-security-policy'),/frame-ancestors 'none'/);
+  const composerScript=await fetch(`${app.origin}/composer.js`);assert.equal(composerScript.status,200);assert.match(await composerScript.text(),/isComposerSubmitKey/);
   assert.equal((await fetch(`${app.origin}/data/settings.json`)).status,404);
+  // A file:// URL is documented as clickable. Without conversion it fails the
+  // absolute-path check, so reaching "does not exist" proves it was decoded.
+  // The path is fictional on purpose: a real one would open a window.
+  const open=async path=>{const r=await fetch(`${app.origin}/api/open`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({path})});return {status:r.status,error:(await r.json()).error};};
+  const fileUrl=await open('file:///D:/portable-does-not-exist/never.txt');
+  assert.equal(fileUrl.status,400);assert.equal(fileUrl.error,'That path does not exist');
+  // A file URL with a host is a UNC path, not a rejection.
+  assert.equal((await open('file://portable-nowhere/share/x.txt')).error,'That path does not exist');
+  assert.equal((await open('file:')).error,'Invalid file URL');
+  assert.equal((await open('relative.txt')).error,'Only absolute local paths can be opened');
+  assert.equal((await open('')).error,'Invalid path');
   assert.equal((await fetch(`${app.origin}/api/config`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'text/plain'},body:'{}'})).status,415);
   const picked=await fetch(`${app.origin}/api/workspace/pick`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({initial:'/ignored'})});
   assert.deepEqual(await picked.json(),{workspace:temp,cancelled:false});
   const created=await fetch(`${app.origin}/api/sessions`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({workspace:temp,trusted:true})});const session=await created.json();assert.equal(created.status,201);
   const upload=await fetch(`${app.origin}/api/sessions/${session.id}/attachments`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({files:[{name:'screen.png',type:'image/png',data:Buffer.from('image fixture').toString('base64')}]})});const uploaded=await upload.json();assert.equal(upload.status,201);assert.equal(uploaded.attachments[0].name,'screen.png');
   assert.equal((await fetch(`${app.origin}/api/sessions/${session.id}`,{method:'DELETE',headers:{'X-Portable-Token':app.token}})).status,200);
+  assert.equal((await fetch(`${app.origin}/api/sessions/${session.id}`,{headers:{'X-Portable-Token':app.token}})).status,404);
+  const chats=join(process.env.PORTABLE_AI_DATA_DIR,'chats');mkdirSync(chats,{recursive:true});writeFileSync(join(chats,'legacy-one.json'),JSON.stringify({title:'Legacy one',messages:[]}));
+  assert.equal((await fetch(`${app.origin}/api/sessions/legacy-one`,{method:'DELETE',headers:{'X-Portable-Token':app.token}})).status,200);
+  assert.equal(existsSync(join(chats,'legacy-one.json')),false);
+  assert.equal((await fetch(`${app.origin}/api/sessions/legacy-one`,{method:'DELETE',headers:{'X-Portable-Token':app.token}})).status,404);
+  assert.equal((await fetch(`${app.origin}/api/sessions/..%2Fsettings`,{method:'DELETE',headers:{'X-Portable-Token':app.token}})).status,404);
   const tested=await fetch(`${app.origin}/api/connection/test`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify(profile)});
   assert.deepEqual(await tested.json(),{ok:true,message:'Validated custom'});
 });
@@ -113,6 +150,33 @@ test('SDK bridge forwards approval decisions, stores real session IDs and resume
   assert.equal(visible.find(event=>event.type==='message'&&event.role==='user').attachments[0].name,'screen.png');assert.equal(decisions[0].behavior,'allow');assert.equal(decisions[1].behavior,'deny');assert.equal(resumes[1],'sdk-session-123');assert.equal(store.get(s.id).sdkSessionId,'sdk-session-123');assert.equal(store.get(s.id).status,'completed');
   await assert.rejects(manager.start(s.id,'bad',{unrestricted:true}),/confirmation/);
 });
+test('attached images reach the model as real image blocks',async()=>{
+  saveProfile({...profile,provider:'lmstudio',baseUrl:PROVIDERS.lmstudio.baseUrl});const p=readConfig().profiles.lmstudio;
+  const store=new SessionStore(join(temp,'image-prompt-sessions')),s=store.create({workspace:temp,profile:p,trusted:true});
+  const prompts=[];
+  const manager=new AgentManager(store,{executable:()=>'/fake/claude',sdkLoader:async()=>({query:({prompt})=>{
+    prompts.push(prompt);const q=(async function*(){yield {type:'assistant',message:{id:'i',content:[{type:'text',text:'Seen.'}]}};yield {type:'result',is_error:false};})();q.close=()=>{};return q;
+  }})});
+  const image={id:'img-id',name:'shot.png',type:'image/png',size:12,path:'/private/shot.png',data:'iVBORw0KGgo='};
+  const doc={id:'doc-id',name:'notes.txt',type:'text/plain',size:5,path:'/private/notes.txt'};
+  await(await manager.start(s.id,'describe it',{attachments:[image,doc]})).promise;
+  // Images force the streamed prompt form, which is the only one that carries content blocks.
+  assert.equal(typeof prompts[0],'object','a streamed prompt is expected');
+  const messages=[];for await(const message of prompts[0])messages.push(message);
+  assert.equal(messages.length,1);
+  const content=messages[0].message.content;
+  assert.equal(messages[0].type,'user');assert.equal(messages[0].parent_tool_use_id,null);
+  assert.deepEqual(content[1],{type:'image',source:{type:'base64',media_type:'image/png',data:'iVBORw0KGgo='}});
+  // The text still names the plain file so the agent can open it.
+  assert.match(content[0].text,/notes\.txt/);assert.match(content[0].text,/describe it/);
+  assert.doesNotMatch(content[0].text,/shot\.png.*\/private\/shot\.png/);
+
+  // Without images the original single-string prompt is kept.
+  const plain=[];const plainManager=new AgentManager(store,{executable:()=>'/fake/claude',sdkLoader:async()=>({query:({prompt})=>{plain.push(prompt);const q=(async function*(){yield {type:'result',is_error:false};})();q.close=()=>{};return q;}})});
+  await(await plainManager.start(s.id,'no files')).promise;
+  assert.equal(typeof plain[0],'string');
+});
+
 test('OpenAI adapters resume the same native Claude conversation',async()=>{
   saveProfile(profile);const p=readConfig().profiles.custom;
   const store=new SessionStore(join(temp,'adapter-handoff-sessions')),s=store.create({workspace:temp,profile:p,trusted:true});const calls=[];let turn=0;
@@ -126,6 +190,51 @@ test('native Claude terminal conversations are imported with their project and t
   saveProfile(profile);const id='11111111-2222-4333-8444-555555555555',project=join(process.env.PORTABLE_AI_DATA_DIR,'claude','custom-api','projects','fixture-project');mkdirSync(project,{recursive:true});
   const rows=[{type:'user',cwd:temp,timestamp:'2026-01-01T00:00:00.000Z',message:{content:[{type:'text',text:'Terminal conversation'}]}},{type:'assistant',cwd:temp,timestamp:'2026-01-01T00:00:01.000Z',message:{id:'a',model:'test-model',content:[{type:'text',text:'Shared reply'}]}}];writeFileSync(join(project,`${id}.jsonl`),rows.map(JSON.stringify).join('\n')+'\n');
   const store=new SessionStore(join(temp,'native-import-sessions'));store.syncNative(readConfig());const imported=store.list().find(session=>session.sdkSessionId===id);assert.ok(imported);assert.equal(imported.workspace,temp);assert.equal(imported.nativeConversation,true);assert.deepEqual(store.get(imported.id).transcript.map(event=>event.text),['Terminal conversation','Shared reply']);
+  // Imported conversations must carry an event log the run loop can append to.
+  assert.deepEqual(store.get(imported.id).events,[]);
+});
+test('an imported conversation without an event log can still run a turn',async()=>{
+  saveProfile({...profile,provider:'lmstudio',baseUrl:PROVIDERS.lmstudio.baseUrl});const p=readConfig().profiles.lmstudio;
+  const store=new SessionStore(join(temp,'native-run-sessions'));
+  const session=store.create({workspace:temp,profile:p,trusted:true});
+  const legacy={...session};delete legacy.events;store.save(legacy);
+  assert.equal(store.get(session.id).events,undefined);
+  const manager=new AgentManager(store,{executable:()=>'/fake/claude',sdkLoader:async()=>({query:()=>{const q=(async function*(){yield {type:'system',subtype:'init',session_id:'native-run-session'};yield {type:'assistant',message:{id:'n',content:[{type:'text',text:'Resumed.'}]}};yield {type:'result',is_error:false};})();q.close=()=>{};return q;}})});
+  await(await manager.start(session.id,'continue')).promise;
+  const saved=store.get(session.id);
+  assert.ok(Array.isArray(saved.events));assert.ok(saved.events.some(event=>event.type==='message'));
+  assert.equal(saved.status,'completed');
+});
+test('a failed start does not leave the session locked as already running',async()=>{
+  saveProfile({...profile,provider:'lmstudio',baseUrl:PROVIDERS.lmstudio.baseUrl});const p=readConfig().profiles.lmstudio;
+  const store=new SessionStore(join(temp,'failed-start-sessions'));
+  const session=store.create({workspace:temp,profile:p,trusted:true});
+  const manager=new AgentManager(store,{executable:()=>'/fake/claude',sdkLoader:async()=>({query:()=>{const q=(async function*(){yield {type:'result',is_error:false};})();q.close=()=>{};return q;}})});
+  // A write failure after runs.set() reproduces any crash inside start().
+  const save=store.save.bind(store);store.save=()=>{throw new Error('disk full');};
+  await assert.rejects(manager.start(session.id,'first'),/disk full/);
+  assert.equal(manager.runs.has(session.id),false,'the failed run must be released');
+  store.save=save;
+  const retried=await manager.start(session.id,'second');await retried.promise;
+  assert.equal(store.get(session.id).status,'completed');
+});
+test('deleting a native conversation removes its Claude history file',async t=>{
+  saveProfile(profile);
+  const id='22222222-3333-4444-8555-666666666666',project=join(process.env.PORTABLE_AI_DATA_DIR,'claude','custom-api','projects','delete-project');mkdirSync(project,{recursive:true});
+  const file=join(project,`${id}.jsonl`),rows=[{type:'user',cwd:temp,timestamp:'2026-01-02T00:00:00.000Z',message:{content:[{type:'text',text:'Delete me'}]}},{type:'assistant',cwd:temp,message:{id:'b',model:'test-model',content:[{type:'text',text:'Gone soon'}]}}];
+  writeFileSync(file,rows.map(JSON.stringify).join('\n')+'\n');
+  const store=new SessionStore(join(temp,'native-delete-sessions'));store.syncNative(readConfig());const imported=store.list().find(session=>session.sdkSessionId===id);assert.ok(imported);assert.equal(store.get(imported.id).nativeSource,file);
+  const stale=store.create({workspace:temp,profile:readConfig().profiles.custom,trusted:true});stale.nativeConversation=true;stale.sdkSessionId='33333333-4444-4555-8666-777777777777';stale.nativeSource=join(temp,'gone-elsewhere.jsonl');store.save(stale);
+  const outside=join(temp,'outside.jsonl');writeFileSync(outside,'must stay');
+  const external=store.create({workspace:temp,profile:readConfig().profiles.custom,trusted:true});external.nativeConversation=true;external.sdkSessionId='44444444-5555-4666-8777-888888888888';external.nativeSource=outside;store.save(external);
+  const app=await startDashboard({port:0,store});t.after(()=>app.close());
+  assert.equal((await fetch(`${app.origin}/api/sessions/${imported.id}`,{method:'DELETE',headers:{'X-Portable-Token':app.token}})).status,200);
+  assert.equal(existsSync(file),false);assert.equal(store.get(imported.id),null);
+  store.syncNative(readConfig());assert.equal(store.list().some(session=>session.sdkSessionId===id),false);
+  assert.equal((await fetch(`${app.origin}/api/sessions/${stale.id}`,{method:'DELETE',headers:{'X-Portable-Token':app.token}})).status,200);assert.equal(store.get(stale.id),null);
+  assert.equal((await fetch(`${app.origin}/api/sessions/${external.id}`,{method:'DELETE',headers:{'X-Portable-Token':app.token}})).status,200);assert.equal(store.get(external.id),null);
+  assert.equal(readFileSync(outside,'utf8'),'must stay');
+  removeNativeSession({sdkSessionId:id,nativeSource:outside});assert.equal(readFileSync(outside,'utf8'),'must stay');
 });
 test('composer permissions map to the SDK and unrestricted access requires confirmation',async()=>{
   saveProfile({...profile,provider:'lmstudio',baseUrl:PROVIDERS.lmstudio.baseUrl});const p=readConfig().profiles.lmstudio;
@@ -134,6 +243,9 @@ test('composer permissions map to the SDK and unrestricted access requires confi
   for(const permissionMode of ['default','acceptEdits','bypassPermissions']){
     await(await manager.start(s.id,'test permissions',{permissionMode,...(permissionMode==='bypassPermissions'?{confirmation:'UNRESTRICTED'}:{})})).promise;
     assert.equal(observed.at(-1).permissionMode,permissionMode);assert.equal(observed.at(-1).allowDangerouslySkipPermissions,permissionMode==='bypassPermissions');assert.equal(store.get(s.id).permissionMode,permissionMode);
+    // The SDK ignores canUseTool in bypass mode and warns about it, so it is only
+    // installed where it can actually gate a tool call.
+    assert.equal(typeof observed.at(-1).canUseTool==='function',permissionMode!=='bypassPermissions');
   }
   await assert.rejects(manager.start(s.id,'bad',{permissionMode:'bypassPermissions'}),/confirmation/);
   await assert.rejects(manager.start(s.id,'bad',{permissionMode:'auto'}),/Unsupported permission/);
@@ -199,4 +311,40 @@ test('legacy transcript migration never fabricates ordering when event boundarie
   const migrated=sessionTranscript({messages:[{role:'user',content:'old question'},{role:'assistant',content:'old answer'}],events:[{type:'tool',id:'old-tool',name:'Read'},{type:'tool_result',id:'old-tool',output:'x'}]});
   assert.deepEqual(migrated.map(e=>e.type),['message','message','history_note','tool','tool_result']);
   assert.match(migrated[2].text,/positions were not recorded/);
+});
+test('a managed model picker keeps the options the user already had',()=>{
+  const profile={provider:'custom',model:'my-model',contextWindow:1000000};
+  const wanted=profileSettings(profile);
+  const mine={model:'my-model',behavesAs:'claude-sonnet-5-5'};
+  // The user's own options survive; the managed entry is appended.
+  const existing={theme:'dark',modelPicker:{options:[{model:'other',behavesAs:'claude-haiku-5-5'}]}};
+  const merged=mergeProfileSettings(existing,wanted);
+  assert.deepEqual(merged.modelPicker.options,[{model:'other',behavesAs:'claude-haiku-5-5'},mine]);
+  assert.equal(merged.theme,'dark','unrelated keys survive too');
+  // Restarting must not grow the list: the entry is replaced in place.
+  const again=mergeProfileSettings(merged,wanted);
+  assert.equal(again.modelPicker.options.length,2);
+  // A picker without options is left as it was apart from our entry.
+  assert.deepEqual(mergeProfileSettings({modelPicker:{foo:1}},wanted).modelPicker,{foo:1,options:[mine]});
+});
+
+test('the studio turn follows the stored bypass-permissions default',async t=>{
+  saveProfile({...profile,provider:'lmstudio',baseUrl:PROVIDERS.lmstudio.baseUrl});const p=readConfig().profiles.lmstudio;
+  const store=new SessionStore(join(temp,'studio-permission-sessions'));
+  const session=store.create({workspace:temp,profile:p,trusted:true});
+  const seen=[];
+  const manager={runs:new Map(),responseTimeoutMs:120000,
+    async start(id,prompt,options,listener){seen.push(options);const run={listeners:new Set([listener]),approvals:new Map(),promise:Promise.resolve()};this.runs.set(id,run);listener({type:'status',status:'queued'});return run;},
+    async approve(){},async cancel(){},async close(){}};
+  const app=await startDashboard({port:0,store,manager});t.after(()=>app.close());
+  const run=async body=>{const response=await fetch(`${app.origin}/api/sessions/${session.id}/run`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify(body)});await response.text();return response.status;};
+  // No permissionMode in the request: the stored default (ON) applies.
+  assert.equal(await run({prompt:'first'}),200);
+  assert.equal(seen[0].permissionMode,'bypassPermissions');
+  assert.equal(seen[0].confirmation,'UNRESTRICTED');
+  // An explicit per-turn choice is passed through unchanged.
+  manager.runs.clear();
+  assert.equal(await run({prompt:'second',permissionMode:'default'}),200);
+  assert.equal(seen[1].permissionMode,'default');
+  assert.equal(seen[1].confirmation,undefined);
 });

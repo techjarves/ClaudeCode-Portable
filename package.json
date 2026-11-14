@@ -1,6 +1,6 @@
 {
   "name": "claudecode-portable",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,5 +10,5 @@
     "check": "node tools/check.mjs",
     "smoke": "node tests/runtime-smoke.mjs"
   },
-  "engines": { "node": ">=22" }
+  "engines": { "node": ">=26" }
 }

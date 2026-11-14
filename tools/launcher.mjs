@@ -5,18 +5,49 @@ import { existsSync } from 'node:fs';
 import { ROOT } from '../lib/paths.mjs';
 import { readConfig, saveProfile } from '../lib/config.mjs';
 import { PROVIDERS, providerEnvironment } from '../lib/providers.mjs';
-import { executableAt, installRuntime, isStubExecutable, repairNativeBinary, runtimeStatus, rollbackRuntime, run } from '../lib/runtime.mjs';
+import { availableUpdate, executableAt, installRuntime, isStubExecutable, manifest, repairNativeBinary, runtimeStatus, rollbackRuntime, run, savePinnedVersions } from '../lib/runtime.mjs';
 import { startAdapter } from '../lib/adapter.mjs';
 import { startExternalAdapter } from '../lib/external-adapter.mjs';
 import { startResponsesAdapter } from '../lib/responses-adapter.mjs';
+import { bypassPermissionsEnabled, resolvePermissionFlags, setBypassPermissions } from '../lib/permissions.mjs';
+import { prepareLocalSession } from '../lib/local-session.mjs';
+import { availablePlaywrightUpdate, ensurePlaywright, installPlaywright, playwrightStatus, savePlaywrightPin } from '../lib/playwright.mjs';
+
+// The launcher runs from START.bat and start.sh alike; hints must name the
+// script the user actually invoked.
+const LAUNCHER_NAME = process.platform === 'win32' ? 'START.bat' : 'start.sh';
+const offline = process.argv.includes('--offline');
+const out = s => process.stdout.write(s);
+
+// Runtime install plus the optional browser automation. Playwright failures stay
+// warnings: they must never keep Claude Code from starting.
+async function repairRuntime() {
+  const version = await installRuntime({ onOutput: out });
+  await ensurePlaywright({ onOutput: out, offline });
+  return version;
+}
+
+function describeBypass(enabled) {
+  return enabled ? 'ON  (commands and file writes run without approval)' : 'OFF (Claude Code asks before changes)';
+}
 
 async function main() {
   let [command, ...args] = process.argv.slice(2);
   if (command === '--quick') command = 'cli';
   if (command === '--offline') command = 'cli';
-  if (command === 'install' || command === 'update') return console.log(await installRuntime({ onOutput: s => process.stdout.write(s) }));
+  if (command === 'install' || command === 'update') return console.log(await repairRuntime());
   if (command === 'rollback') return rollbackRuntime();
-  if (command === 'status') return console.log(JSON.stringify(await runtimeStatus(), null, 2));
+  if (command === 'status') return console.log(JSON.stringify({ ...(await runtimeStatus()), playwright: playwrightStatus() }, null, 2));
+  if (command === 'permissions') {
+    const value = String(args[0] || 'status').toLowerCase();
+    if (value === 'status') {
+      const enabled = bypassPermissionsEnabled(readConfig());
+      return console.log(`Bypass permissions: ${describeBypass(enabled)}\nChange with: ${LAUNCHER_NAME} permissions on|off`);
+    }
+    if (!['on', 'off'].includes(value)) throw new Error('Use permissions on, permissions off, or permissions status');
+    setBypassPermissions(value === 'on');
+    return console.log(`Bypass permissions: ${describeBypass(value === 'on')}\nSaved in data/settings.json. Applies to the next launch.`);
+  }
   if (command === 'use-ollama') {
     if(!args[0]) throw new Error('Provide the installed Ollama model name');
     saveProfile({provider:'ollama',auth:'api',baseUrl:PROVIDERS.ollama.baseUrl,key:'',model:args[0]});
@@ -27,14 +58,59 @@ async function main() {
     process.stdout.write('Repairing the portable Claude Code native executable...\n');
     if (!repairNativeBinary()) executable = null;
   }
-  if (!executable) await installRuntime({ onOutput: s => process.stdout.write(s) });
+  // First start: install the runtime, then the optional browser automation.
+  if (!executable) await repairRuntime();
+  else await ensurePlaywright({ onOutput: out, offline });
   if (!command) {
-    console.log('\n  CLAUDECODE-PORTABLE\n  Official Claude Code · Your choice of model\n\n  1  Open studio dashboard\n  2  Launch Claude Code terminal\n  3  Configure providers\n  4  Set up local models\n  5  Repair / update pinned runtime\n  6  Roll back runtime\n');
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const answer = await rl.question('Choose [1]: '); rl.close();
-    command = ({ '2': 'cli', '3': 'dashboard', '4': 'local-setup', '5': 'update', '6': 'rollback' })[answer] || 'dashboard';
+    // Option 8 toggles the stored preference and returns to the menu so the
+    // user can adjust it and still launch in the same run.
+    let choice;
+    while (!choice) {
+      console.log(`\n  CLAUDECODE-PORTABLE\n  Official Claude Code · Your choice of model\n\n  1  Open studio dashboard\n  2  Launch Claude Code terminal\n  3  Configure providers\n  4  Set up local models\n  5  Repair / update pinned runtime\n  6  Roll back runtime\n  7  Check for updates\n  8  Bypass permissions: ${bypassPermissionsEnabled(readConfig()) ? 'ON' : 'OFF'}\n`);
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await rl.question('Choose [1]: '); rl.close();
+      if (answer.trim() === '8') {
+        const enabled = setBypassPermissions(!bypassPermissionsEnabled(readConfig()));
+        console.log(`\nBypass permissions is now ${enabled ? 'ON — approvals disabled for terminal launches' : 'OFF — Claude Code asks before changes'}.`);
+        continue;
+      }
+      choice = ({ '2': 'cli', '3': 'dashboard', '4': 'local-setup', '5': 'update', '6': 'rollback', '7': 'check-update' })[answer.trim()] || 'dashboard';
+    }
+    command = choice;
   }
-  if (command === 'update') return installRuntime({ onOutput: s => process.stdout.write(s) });
+  if (command === 'check-update') {
+    const updates = await availableUpdate();
+    const names = Object.keys(updates);
+    // Playwright is checked separately: a failing lookup must not break the check.
+    let playwrightUpdate = null;
+    try { playwrightUpdate = await availablePlaywrightUpdate(); } catch (error) { console.log(`Playwright check skipped: ${error.message}`); }
+    const missingPlaywright = !playwrightStatus().ready;
+    if (!names.length && !playwrightUpdate && !missingPlaywright) {
+      return console.log(`\nRuntime is up to date (${manifest.dependencies['@anthropic-ai/claude-code']}).`);
+    }
+    console.log('\nUpdate available:');
+    for (const name of names) console.log(`  ${name}  ${updates[name].current} -> ${updates[name].latest}`);
+    if (playwrightUpdate) console.log(`  playwright  ${playwrightUpdate.current} -> ${playwrightUpdate.latest}`);
+    else if (missingPlaywright) console.log('  playwright  not installed');
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await rl.question('Install this update now? [y/N] '); rl.close();
+    if (!/^y(es)?$/i.test(answer.trim())) return console.log('Update skipped.');
+    const previous = savePinnedVersions(Object.fromEntries(names.map(name => [name, updates[name].latest])));
+    let previousPlaywright = null;
+    try {
+      if (names.length) await installRuntime({ onOutput: out });
+      if (playwrightUpdate || missingPlaywright) {
+        previousPlaywright = playwrightUpdate ? savePlaywrightPin(playwrightUpdate.latest) : null;
+        await installPlaywright({ onOutput: out, force: !!playwrightUpdate });
+      }
+    } catch (error) {
+      savePinnedVersions(previous);
+      if (previousPlaywright !== null) savePlaywrightPin(previousPlaywright);
+      throw error;
+    }
+    return;
+  }
+  if (command === 'update') return repairRuntime();
   if (command === 'rollback') return rollbackRuntime();
   if (command === 'local-setup') {
     const windows = process.platform === 'win32';
@@ -50,7 +126,7 @@ async function main() {
     }
     const stop = async () => { await dashboard.close(); process.exit(0); }; process.once('SIGINT',stop); process.once('SIGTERM',stop); return;
   }
-  if (!['cli','resume'].includes(command)) throw new Error('Commands: dashboard, cli, resume <session-id>, install, update, rollback, status, local-setup');
+  if (!['cli','resume'].includes(command)) throw new Error('Commands: dashboard, cli, resume <session-id>, install, update, check-update, rollback, status, local-setup');
   let config = readConfig(); let profile = config.profiles[config.active];
   if (!profile) {
     if (!process.stdin.isTTY) throw new Error('Configure a provider in the dashboard first');
@@ -64,7 +140,15 @@ async function main() {
     if (!args[0] || !/^[a-zA-Z0-9-]+$/.test(args[0])) throw new Error('Provide an official Claude Code session ID');
     args = ['--resume',...args];
   }
-  if (args.some(a => /dangerously-skip-permissions|permission-mode=bypassPermissions/.test(a)) || args.includes('bypassPermissions')) {
+  // Bypass permissions comes from the stored preference (default ON).
+  // --safe opts out for one launch, --unrestricted opts in for one launch.
+  const resolved = resolvePermissionFlags(args, {
+    bypass: bypassPermissionsEnabled(config),
+    safe: args.includes('--safe'),
+    forceOn: args.includes('--unrestricted'),
+  });
+  args = resolved.args;
+  if (resolved.explicit) {
     if (!process.stdin.isTTY) throw new Error('Unrestricted mode requires an interactive confirmation');
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     const answer = await rl.question('Unrestricted mode can execute commands and change files without asking. Type UNRESTRICTED: '); rl.close();
@@ -72,10 +156,11 @@ async function main() {
   }
   const useAdapter = PROVIDERS[profile.provider].transport === 'openai';
   const adapter = !useAdapter ? null : profile.adapter === 'external' ? await startExternalAdapter(profile) : profile.adapter === 'responses' ? await startResponsesAdapter(profile) : await startAdapter(profile);
-  const env = providerEnvironment(profile, { adapter });
-  if (adapter) env.MAX_THINKING_TOKENS = '0';
-  console.log(`\nOfficial Claude Code → ${PROVIDERS[profile.provider].name} / ${profile.model}${useAdapter && profile.adapter === 'external' ? ` · external adapter (${profile.toolFormat || 'native'})` : useAdapter && profile.adapter === 'responses' ? ' · Responses API adapter' : ''}\nNon-Claude models have provider-dependent feature compatibility.\n`);
+  // Ollama: start the bundled server and the prompt-trimming proxy first.
+  const local = await prepareLocalSession(profile);
+  const env = providerEnvironment(local.profile, { adapter });
+  console.log(`\nOfficial Claude Code → ${PROVIDERS[profile.provider].name} / ${profile.model}${useAdapter && profile.adapter === 'external' ? ` · external adapter (${profile.toolFormat || 'native'})` : useAdapter && profile.adapter === 'responses' ? ' · Responses API adapter' : ''}\nBypass permissions: ${resolved.bypass ? `ON (no approval prompts; change with ${LAUNCHER_NAME} permissions off)` : 'OFF (approval prompts enabled)'}${local.notes.length ? `\n${local.notes.join('\n')}` : ''}\nNon-Claude models have provider-dependent feature compatibility.\n`);
   try { await run(executableAt(), ['--model',profile.model,...args], { stdio:'inherit', env, cwd: process.cwd() }); }
-  finally { await adapter?.close(); }
+  finally { await adapter?.close(); await local.cleanup(); }
 }
 main().catch(e => { console.error(`\nClaudeCode-Portable: ${e.message}`); process.exitCode=1; });
