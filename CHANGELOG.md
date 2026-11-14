@@ -50,6 +50,22 @@ bundled browser automation is there — it would have had to stumble over `engin
 - The profile directory is the only place this can work: sessions run with
   `settingSources: ['user']`, so a `CLAUDE.md` inside a project would not be loaded.
 
+### Fixed
+
+#### The image-paste binding has no text fallback
+
+The 2.0 changelog claimed that `chat:imagePaste` "falls back to a normal text paste when the
+clipboard holds no image, so the extra binding cannot break pasting text". That is wrong, and the
+claim had to be corrected rather than left standing in a released section:
+
+- The handler reads the clipboard and calls the attach function only when it got an image:
+  `yCe(rc(st())).then(Ct => { if (Ct) c(Ct.base64, …) })`. There is no `else`.
+- With no image in the clipboard the key does nothing at all — no text paste, only the feedback
+  "No image found in clipboard."
+- The README now states this and points text pasting at `Ctrl+Shift+V` or the context menu.
+
+The 2.0 section is left as published; this note records what actually happens.
+
 ## [2.0] - 2026-11-14
 
 ### Summary

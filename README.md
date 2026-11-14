@@ -335,14 +335,9 @@ To make `Ctrl+V` work as well, the launcher adds it to the profile's `keybinding
 { "bindings": [{ "context": "Chat", "bindings": { "ctrl+v": "chat:imagePaste" } }] }
 ```
 
-Two ways to get `Ctrl+V` through the classic console:
+The key only arrives if the terminal forwards it. **Windows Terminal** does not bind `Ctrl+V` by itself — its default for paste is `Ctrl+Shift+V` — so the key reaches Claude Code there. The classic console always claims `Ctrl+V` and cannot be told otherwise without a system-wide change, so **Alt+V** stays the shortcut in that window.
 
-- Use **Windows Terminal** (the default on Windows 11). Set its paste shortcut to `Ctrl+Shift+V` if `Ctrl+V` still does not arrive.
-- Or disable the console's own shortcuts for the current user, after which `Ctrl+V` belongs to the application and the console uses `Ctrl+Shift+V`/right-click instead:
-  ```
-  reg add "HKCU\Console" /v CtrlKeyShortcutsDisabled /t REG_DWORD /d 1 /f
-  ```
-  This changes every console window, not just Claude Code.
+**There is no text fallback.** The binding only calls `chat:imagePaste`, so `Ctrl+V` with no image in the clipboard does nothing at all — not even a text paste. Keep **Ctrl+Shift+V** or the context menu for text.
 
 Pasting into the terminal needs a clipboard tool: PowerShell with `System.Windows.Forms` on Windows, `xclip` or `wl-paste` on Linux, `osascript` on macOS. If nothing is pasted, check that tool first. `START.bat` and this project's environment do not interfere with it.
 
