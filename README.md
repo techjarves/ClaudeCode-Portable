@@ -403,7 +403,35 @@ Claude Code renders local paths and URLs as OSC 8 hyperlinks, which terminals sh
 | Classic console (`conhost`) | No: it sets no identifier, so Claude Code sends no escape sequences. |
 | macOS Terminal, iTerm2, kitty, Warp, Ghostty, VS Code | Yes. |
 
-To start the classic console's sessions in **Windows Terminal** instead, open Windows Terminal and run `START.bat` (or `RESUME.bat`) there. To force the escape sequences anyway, set `PORTABLE_AI_HYPERLINKS=1` before launching — it exports `FORCE_HYPERLINK=1`. Terminals without OSC 8 support will print the sequences as visible noise, which is why this is not enabled by default.
+`WT.bat` starts the studio in Windows Terminal (use `WT.bat resume` for a session). To force the escape sequences in another terminal, set `PORTABLE_AI_HYPERLINKS=1` before launching — it exports `FORCE_HYPERLINK=1`. Terminals without OSC 8 support will print the sequences as visible noise, which is why this is not enabled by default.
+
+### Pasting images: Ctrl+V vs Alt+V
+
+Claude Code binds image paste to **Alt+V** on Windows and to Ctrl+V everywhere else. The launcher writes
+`ctrl+v → chat:imagePaste` into `keybindings.json` in the profile directory, so the familiar shortcut
+works too — but only where the terminal lets the key through.
+
+**A terminal that claims Ctrl+V for its own paste eats the key.** Claude Code never sees it, so the
+binding cannot fire. This is the normal case:
+
+| Where | Ctrl+V | Result |
+|---|---|---|
+| Classic console (`conhost`) | Always the console's text paste, not configurable | Image paste: **Alt+V** only |
+| Windows Terminal, default settings | Bound to `paste` in `keybindings` | Image paste: **Alt+V** only |
+| Windows Terminal, Ctrl+V unbound | Reaches Claude Code | Image paste: **Ctrl+V**, text paste: **Ctrl+Shift+V** |
+
+Windows Terminal does not bind Ctrl+V by itself — its default for paste is `Ctrl+Shift+V`. A `ctrl+v`
+entry in `settings.json` was added by the user, and the terminal then pastes text instead of forwarding
+the key. To hand Ctrl+V to Claude Code, remove that entry:
+
+```json
+"keybindings": [
+    { "id": "User.paste", "keys": "ctrl+v" }   // remove this entry
+]
+```
+
+Then restart Windows Terminal. `Ctrl+Shift+V` keeps pasting text, and `Ctrl+V` pastes an image — or
+does nothing when the clipboard holds no image, because the action has no text fallback.
 
 ---
 
