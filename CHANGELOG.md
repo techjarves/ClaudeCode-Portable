@@ -9,7 +9,7 @@ only the differences are listed.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [2.1] - 2026-11-14
 
 ### Added
 
