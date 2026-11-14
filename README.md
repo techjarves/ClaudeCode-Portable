@@ -324,8 +324,25 @@ Attached **images** are sent as real image blocks, the same way the terminal att
 The Claude Code terminal handles clipboard images itself:
 
 1. Copy or take a screenshot (Win+Shift+S, or the snipping tool).
-2. Press **Ctrl+V** in the Claude Code prompt — on macOS use **Ctrl+V**, not ⌘V.
+2. Press **Alt+V** in the Claude Code prompt on Windows. On macOS and Linux it is **Ctrl+V**.
 3. The image is saved to a temporary PNG and attached to your next message.
+
+**Why Alt+V and not Ctrl+V.** Claude Code binds image paste to `alt+v` on Windows (`ctrl+v` only on macOS, Linux, and WSL). The classic Windows console additionally swallows `Ctrl+V` for its own paste, so the key never reaches Claude Code — with a screenshot in the clipboard nothing happens. `Alt+V` works in both the classic console and Windows Terminal.
+
+To make `Ctrl+V` work as well, the launcher adds it to the profile's `keybindings.json`; it takes effect on the next start. It only helps in a terminal that forwards the keystroke:
+
+```json
+{ "bindings": [{ "context": "Chat", "bindings": { "ctrl+v": "chat:imagePaste" } }] }
+```
+
+Two ways to get `Ctrl+V` through the classic console:
+
+- Use **Windows Terminal** (the default on Windows 11). Set its paste shortcut to `Ctrl+Shift+V` if `Ctrl+V` still does not arrive.
+- Or disable the console's own shortcuts for the current user, after which `Ctrl+V` belongs to the application and the console uses `Ctrl+Shift+V`/right-click instead:
+  ```
+  reg add "HKCU\Console" /v CtrlKeyShortcutsDisabled /t REG_DWORD /d 1 /f
+  ```
+  This changes every console window, not just Claude Code.
 
 Pasting into the terminal needs a clipboard tool: PowerShell with `System.Windows.Forms` on Windows, `xclip` or `wl-paste` on Linux, `osascript` on macOS. If nothing is pasted, check that tool first. `START.bat` and this project's environment do not interfere with it.
 

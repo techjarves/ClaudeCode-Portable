@@ -104,6 +104,20 @@ Claude Code only knows Anthropic model IDs; any other ID warned "Model isn't rec
   session (`d101ffb`).
 - The delete button stays visible in the sidebar for synced conversations (`247aeb1`).
 
+#### Image paste in the terminal: Ctrl+V added next to Alt+V
+
+Claude Code binds image paste to `alt+v` on Windows — `ctrl+v` only on macOS, Linux, and WSL — and the
+classic Windows console swallows `Ctrl+V` for its own paste. Pressing `Ctrl+V` with a screenshot in the
+clipboard therefore did nothing.
+
+- The launcher now merges `ctrl+v -> chat:imagePaste` into the profile's `keybindings.json`. Existing
+  bindings and every other context survive; an explicit user choice (including an unbind) is never
+  overwritten, and a file with a syntax error is left untouched.
+- Documented that **Alt+V** is the Windows shortcut and works in the classic console today, plus the two
+  ways to make `Ctrl+V` arrive there (Windows Terminal, or `CtrlKeyShortcutsDisabled`).
+- Without an image the action falls back to a normal text paste, so the extra binding cannot break
+  pasting text.
+
 #### Playwright built into the install and update flow
 
 Upstream shipped no browser automation. This fork installs Playwright next to the runtime, so
@@ -304,7 +318,7 @@ SDK warned on every turn.
 
 ### Tests
 
-50 → **99** test cases (`npm test`) against the upstream baseline, all passing, plus `npm run check`.
+50 → **106** test cases (`npm test`) against the upstream baseline, all passing, plus `npm run check`.
 The adopted pull requests contributed `tests/composer.test.mjs` and additions to
 `tests/backend.test.mjs`.
 
