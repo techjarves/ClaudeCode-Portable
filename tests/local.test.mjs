@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, request as httpRequest } from 'node:http';
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -12,7 +13,7 @@ const { resolveGitBash, gitEnvironment, bundledGitBash, hostGitConfigPath } = aw
 const { portableEnvironment, providerEnvironment } = await import('../lib/providers.mjs');
 const { trimSystemPrompt, trimAnthropicBody, trimOpenAIBody, createProxyServer } = await import('../tools/local-proxy.mjs');
 const { prepareLocalSession } = await import('../lib/local-session.mjs');
-const { proxyStatus, ollamaUpstream, localStatus, waitForProxy, registerLocalConsumer, releaseLocalConsumer } = await import('../lib/local-models.mjs');
+const { proxyStatus, ollamaUpstream, localStatus, waitForProxy, registerLocalConsumer, releaseLocalConsumer, startLocal, startProxy } = await import('../lib/local-models.mjs');
 const { PLAYWRIGHT_BROWSERS_DIR } = await import('../lib/playwright.mjs');
 
 test.after(() => rmSync(temp, { recursive: true, force: true }));
@@ -460,30 +461,54 @@ test('a lock whose owner is still alive is waited for, never stolen', async t =>
   t.after(() => holder.kill());
   await new Promise(resolve => holder.once('spawn', resolve));
 
+  // Young and owned by a live process: this is a slow critical section, not a
+  // crash. The old file age does not matter; the owner record is newer.
   writeFileSync(lock, JSON.stringify({ pid: holder.pid, since: Date.now() }));
   const past = new Date(Date.now() - 60_000);
   utimesSync(lock, past, past);
 
-  // A different role, so the stale-lock path is exercised rather than skipped.
   const started = Date.now();
   registerLocalConsumer('server', { pid: 44001, file, alive: () => true });
-  assert.ok(Date.now() - started >= 600, 'the live lock is not broken immediately');
-  // It eventually acquires after its own timeout; the important part is that it
-  // did not delete the lock while its owner was alive.
-  const stillThere = existsSync(lock) === false || JSON.parse(readFileSync(lock, 'utf8')).pid === holder.pid;
-  assert.ok(stillThere, 'the live lock was not replaced by force');
+  assert.ok(Date.now() - started >= 600, 'the live lock is waited for, not taken immediately');
+  // Strict: the lock must still exist and still name the holder. "Gone" would
+  // also be true for a lock that was stolen, which is the regression to catch.
+  assert.ok(existsSync(lock), 'the live lock still exists');
+  assert.equal(JSON.parse(readFileSync(lock, 'utf8')).pid, holder.pid, 'the live lock still belongs to its owner');
+});
+
+test('a lock whose recorded owner is alive but far too old is recovered', () => {
+  // A failed unlink or a reused pid would otherwise strand the lock forever and
+  // push every registry call onto the unserialised fallback.
+  const file = join(temp, 'consumers-ancient-lock.json');
+  const lock = `${file}.lock`;
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(lock, JSON.stringify({ pid: process.pid, since: Date.now() - 120_000 }));
+  const past = new Date(Date.now() - 120_000);
+  utimesSync(lock, past, past);
+
+  const started = Date.now();
+  registerLocalConsumer('server', { pid: 44002, file, alive: () => true });
+  assert.ok(Date.now() - started < 500, 'the ancient lock is broken instead of waited out');
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).consumers.length, 1);
+  assert.equal(existsSync(lock), false, 'our own lock is removed again');
 });
 
 test('a lock left behind by a killed process is broken', () => {
   const file = join(temp, 'consumers-stale-lock.json');
+  const lock = `${file}.lock`;
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(`${file}.lock`, 'dead');
+  // A pid that is certainly not running, plus an old mtime.
+  writeFileSync(lock, JSON.stringify({ pid: 999_999, since: Date.now() - 60_000 }));
   const past = new Date(Date.now() - 60_000);
-  utimesSync(`${file}.lock`, past, past);
+  utimesSync(lock, past, past);
   const started = Date.now();
   registerLocalConsumer('proxy', { pid: 43001, file, alive: () => true });
-  assert.ok(Date.now() - started < 2000, 'the stale lock is not waited out');
+  // Well under the 1500 ms timeout: a lock that is only waited out would also
+  // write the registry, so the duration is what proves it was broken.
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 500, `the stale lock is broken without waiting, took ${elapsed} ms`);
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).consumers.length, 1);
+  assert.equal(existsSync(lock), false, 'our own lock is removed again');
 });
 
 test('a consumer that died without cleanup is pruned', () => {
@@ -512,6 +537,44 @@ test('the readiness poll verifies the requested upstream and stops on a dead chi
   // A proxy that does answer for that upstream is still accepted.
   const accepting = async ({ upstream }) => upstream === 'http://10.0.0.9:11434';
   assert.equal(await waitForProxy(1000, { upstream: 'http://10.0.0.9:11434', child: dead, status: accepting, pollMs: 5 }), true);
+});
+
+test('a launch that lost the port does not record its dead child as the owner', async () => {
+  // Two launches race for the same server: the loser exits on EADDRINUSE while
+  // the winner answers health for the very same upstream. Health cannot tell
+  // them apart, so only a still-running child may be recorded - otherwise the
+  // healthy process loses its owner and survives every session as an orphan.
+  // startLocal/startProxy write to the module's registry, which lives under the
+  // test data directory.
+  const file = join(process.env.PORTABLE_AI_DATA_DIR, 'run', 'local-consumers.json');
+  rmSync(file, { force: true });
+  const spawnDead = () => {
+    const child = new EventEmitter();
+    child.pid = 999_998;
+    child.exitCode = 1; // lost the bind before the first poll
+    child.kill = () => {};
+    return child;
+  };
+  // Not online before the spawn, answered by the winner afterwards.
+  const readyAfterSpawn = online => {
+    let calls = 0;
+    return async () => (++calls === 1 ? { online: false } : { online });
+  };
+
+  const server = await startLocal({ spawnImpl: spawnDead, status: readyAfterSpawn(true), timeoutMs: 200, executable: join(temp, 'ollama-fixture') });
+  assert.deepEqual(server, { alreadyRunning: true }, 'the winner\'s server is used');
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).owners, {}, 'no dead pid is recorded for the server');
+
+  rmSync(file, { force: true });
+  let proxyCalls = 0;
+  const proxy = await startProxy({
+    spawnImpl: spawnDead,
+    status: async () => ++proxyCalls > 1,
+    upstream: { host: '127.0.0.1', port: 11434, secure: false, url: 'http://127.0.0.1:11434' },
+    timeoutMs: 200,
+  });
+  assert.equal(proxy.alreadyRunning, true, 'the running proxy is adopted');
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).owners, {}, 'no dead pid is recorded for the proxy');
 });
 
 test('a foreign service on the Ollama port is not treated as Ollama', async t => {

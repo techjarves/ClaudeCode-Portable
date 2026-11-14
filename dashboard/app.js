@@ -10,7 +10,7 @@ import { permissionModeAfterRun } from '/permission-turn.js';
 const $=s=>document.querySelector(s);
 const $$=s=>[...document.querySelectorAll(s)];
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const state={config:{profiles:{}},providers:{},sessions:[],legacy:[],current:null,workspace:'',projectless:true,expandedProjects:new Set(),runtime:{},responseTimeoutMs:120000,page:'studio',selectedProvider:'anthropic',models:[],attachments:[],running:false,runStatus:'idle',runStartedAt:null,runTimer:null,lastRunDurationMs:0,followOutput:true,durationNote:null,permissionMode:'default',activePermissionMode:'default',defaultPermissionMode:'default',permissionPickedForNextTurn:false,streaming:null,waiting:null,tools:new Map(),thinking:new Map(),seenEvents:new Set(),requestController:null};
+const state={config:{profiles:{}},providers:{},sessions:[],legacy:[],current:null,workspace:'',projectless:true,expandedProjects:new Set(),runtime:{},responseTimeoutMs:120000,page:'studio',selectedProvider:'anthropic',models:[],attachments:[],running:false,runStatus:'idle',runStartedAt:null,runTimer:null,lastRunDurationMs:0,followOutput:true,durationNote:null,permissionMode:'default',activePermissionMode:'default',defaultPermissionMode:'default',permissionPickedForTurn:null,turnGeneration:0,streaming:null,waiting:null,tools:new Map(),thinking:new Map(),seenEvents:new Set(),requestController:null};
 let token=new URLSearchParams(location.hash.slice(1)).get('token')||sessionStorage.getItem('portable-token')||'';
 if(token){sessionStorage.setItem('portable-token',token);history.replaceState(null,'',location.pathname);}
 const profile=()=>state.config.profiles[state.config.active];
@@ -91,9 +91,11 @@ $$('[data-permission]').forEach(button=>button.onclick=async()=>{
     if(!confirmed)return;
   }
   state.permissionMode=mode;
-  // Remembered so the reset after the run knows this was a deliberate choice
-  // for the next turn, not a leftover of the turn that just ended.
-  if(state.running)state.permissionPickedForNextTurn=true;
+  // Remembered with the turn it was picked during, so the reset after a turn
+  // can tell a deliberate choice for the next turn from a leftover. A boolean
+  // would leak: a reconnect finishes a turn without running the composer's
+  // reset, and the choice would then cover two turns.
+  if(state.running)state.permissionPickedForTurn=state.turnGeneration;
   updateHeader();toast(state.running?`${permissionNames[mode]} selected for the next turn. The current turn is unchanged.`:`Permissions: ${permissionNames[mode]}.`);
 });
 $('#settings-permissions').onclick=()=>{setPage('studio');openPermissions();};
@@ -480,13 +482,16 @@ async function consumeRun(path,body,sessionId=state.current?.id){
 }
 $('#composer').onsubmit=async e=>{
   e.preventDefault();if(requests.active){await requests.submit();return;}if(state.running)return;const written=$('#prompt').value.trim();if(!written&&!state.attachments.length)return;
-  let runMode=state.permissionMode,runStarted=false;
+  let runMode=state.permissionMode,runStarted=false,generation=null;
   try{
     if(!await ensureSession())return;
     const uploaded=state.attachments.length?await uploadAttachments():[];
     const prompt=written||'Please inspect the attached files and help me continue this project.';
     state.attachments=[];renderAttachments();state.followOutput=true;$('#prompt').value='';$('#prompt').style.height='';setPage('studio');state.activePermissionMode=state.permissionMode;scrollConversation(true);
     const sessionId=state.current.id;runMode=state.permissionMode;
+    // The picker records which turn a choice was made during; a new turn id
+    // means a choice made earlier belongs to the turn that is starting now.
+    generation=++state.turnGeneration;
     // Only a turn the server actually accepted consumes the one-off choice.
     runStarted=await consumeRun(`/api/sessions/${sessionId}/run`,{prompt,attachments:uploaded.map(file=>file.id),permissionMode:runMode,...(runMode==='bypassPermissions'?{confirmation:'UNRESTRICTED'}:{})},sessionId)===true;
   }catch(err){toast(err.message);}
@@ -495,9 +500,11 @@ $('#composer').onsubmit=async e=>{
     // succeeded or failed; leaving it in place would keep sending the
     // UNRESTRICTED confirmation to every later run. A send that never reached a
     // turn keeps the choice, because it still belongs to the next turn.
-    if(runStarted){
-      const after=permissionModeAfterRun({runMode,currentMode:state.permissionMode,defaultMode:state.defaultPermissionMode,pickedDuringRun:state.permissionPickedForNextTurn===true});
-      state.permissionPickedForNextTurn=false;
+    if(runStarted&&generation!==null){
+      const after=permissionModeAfterRun({runMode,currentMode:state.permissionMode,defaultMode:state.defaultPermissionMode,pickedDuringRun:state.permissionPickedForTurn===generation});
+      // Consumed either way. A choice kept for the next turn is simply the
+      // current mode now, and that next turn resets it like any one-off.
+      state.permissionPickedForTurn=null;
       if(after.reset){state.permissionMode=after.mode;state.activePermissionMode=after.mode;updateHeader();toast(`Permissions: ${permissionNames[after.mode]} for the next turn.`);}
     }
   }
