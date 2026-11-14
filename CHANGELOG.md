@@ -104,6 +104,22 @@ Claude Code only knows Anthropic model IDs; any other ID warned "Model isn't rec
   session (`d101ffb`).
 - The delete button stays visible in the sidebar for synced conversations (`247aeb1`).
 
+#### Playwright built into the install and update flow
+
+Upstream shipped no browser automation. This fork installs Playwright next to the runtime, so
+screenshots and browser checks work from the portable drive without touching the user profile.
+
+- First launch installs the pinned package into `engine/playwright` and the headless Chromium build
+  into `engine/playwright-browsers` (~300 MB; `--only-shell` avoids the ~750 MB full build).
+- Every later launch only checks the installation. A complete setup needs no network.
+- Menu option 5 (`install` / `update`) repairs the runtime **and** Playwright.
+- Menu option 7 (`check-update`) reports newer Playwright releases next to the Claude Code updates
+  and installs them with the same pin rollback: a failed install restores both pins.
+- The version lives in `tools/runtime-manifest.json` (`"playwright": "1.65.1"`), because it decides
+  the Chromium build revision.
+- A failing Playwright install is a warning, never a startup error. `--offline` and
+  `PORTABLE_AI_NO_PLAYWRIGHT=1` skip it.
+
 #### Paste and drop attachments in the studio
 
 Upstream only accepted files through the picker behind the **+** button.
@@ -288,7 +304,7 @@ SDK warned on every turn.
 
 ### Tests
 
-50 → **90** test cases (`npm test`) against the upstream baseline, all passing, plus `npm run check`.
+50 → **99** test cases (`npm test`) against the upstream baseline, all passing, plus `npm run check`.
 The adopted pull requests contributed `tests/composer.test.mjs` and additions to
 `tests/backend.test.mjs`.
 

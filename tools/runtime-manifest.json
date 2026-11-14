@@ -4,6 +4,7 @@
   "allowScripts": {
     "@anthropic-ai/claude-code": true
   },
+  "playwright": "1.65.1",
   "dependencies": {
     "@anthropic-ai/claude-code": "2.1.323",
     "@anthropic-ai/claude-agent-sdk": "0.3.323",

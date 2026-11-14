@@ -11,6 +11,7 @@ const { resolveGitBash, gitEnvironment, bundledGitBash, hostGitConfigPath } = aw
 const { portableEnvironment, providerEnvironment } = await import('../lib/providers.mjs');
 const { trimSystemPrompt, trimAnthropicBody, trimOpenAIBody, createProxyServer } = await import('../tools/local-proxy.mjs');
 const { prepareLocalSession } = await import('../lib/local-session.mjs');
+const { PLAYWRIGHT_BROWSERS_DIR } = await import('../lib/playwright.mjs');
 
 test.after(() => rmSync(temp, { recursive: true, force: true }));
 
@@ -106,6 +107,16 @@ test('portable environment redirects host folders into data/', () => {
     assert.equal(env.LOCALAPPDATA, join(data, 'local_app_data'));
   }
   for (const dir of [env.HOME, env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.XDG_CACHE_HOME]) assert.ok(existsSync(dir), dir);
+});
+
+test('a provider environment points Playwright at the portable browsers when installed', () => {
+  const env = providerEnvironment(
+    { provider: 'deepseek', auth: 'api', model: 'm', baseUrl: 'https://api.deepseek.com/anthropic', key: 'k' },
+    { parent: { PATH: 'C:\\Windows' } },
+  );
+  // Only set when the browsers actually exist, so a script is never pointed at an empty folder.
+  if (existsSync(PLAYWRIGHT_BROWSERS_DIR)) assert.equal(env.PLAYWRIGHT_BROWSERS_PATH, PLAYWRIGHT_BROWSERS_DIR);
+  else assert.equal(env.PLAYWRIGHT_BROWSERS_PATH, undefined);
 });
 
 test('a provider environment redirects host folders and keeps host credentials out', () => {

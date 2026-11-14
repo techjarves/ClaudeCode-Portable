@@ -11,10 +11,21 @@ import { startExternalAdapter } from '../lib/external-adapter.mjs';
 import { startResponsesAdapter } from '../lib/responses-adapter.mjs';
 import { bypassPermissionsEnabled, resolvePermissionFlags, setBypassPermissions } from '../lib/permissions.mjs';
 import { prepareLocalSession } from '../lib/local-session.mjs';
+import { availablePlaywrightUpdate, ensurePlaywright, installPlaywright, playwrightStatus, savePlaywrightPin } from '../lib/playwright.mjs';
 
 // The launcher runs from START.bat and start.sh alike; hints must name the
 // script the user actually invoked.
 const LAUNCHER_NAME = process.platform === 'win32' ? 'START.bat' : 'start.sh';
+const offline = process.argv.includes('--offline');
+const out = s => process.stdout.write(s);
+
+// Runtime install plus the optional browser automation. Playwright failures stay
+// warnings: they must never keep Claude Code from starting.
+async function repairRuntime() {
+  const version = await installRuntime({ onOutput: out });
+  await ensurePlaywright({ onOutput: out, offline });
+  return version;
+}
 
 function describeBypass(enabled) {
   return enabled ? 'ON  (commands and file writes run without approval)' : 'OFF (Claude Code asks before changes)';
@@ -24,9 +35,9 @@ async function main() {
   let [command, ...args] = process.argv.slice(2);
   if (command === '--quick') command = 'cli';
   if (command === '--offline') command = 'cli';
-  if (command === 'install' || command === 'update') return console.log(await installRuntime({ onOutput: s => process.stdout.write(s) }));
+  if (command === 'install' || command === 'update') return console.log(await repairRuntime());
   if (command === 'rollback') return rollbackRuntime();
-  if (command === 'status') return console.log(JSON.stringify(await runtimeStatus(), null, 2));
+  if (command === 'status') return console.log(JSON.stringify({ ...(await runtimeStatus()), playwright: playwrightStatus() }, null, 2));
   if (command === 'permissions') {
     const value = String(args[0] || 'status').toLowerCase();
     if (value === 'status') {
@@ -47,7 +58,9 @@ async function main() {
     process.stdout.write('Repairing the portable Claude Code native executable...\n');
     if (!repairNativeBinary()) executable = null;
   }
-  if (!executable) await installRuntime({ onOutput: s => process.stdout.write(s) });
+  // First start: install the runtime, then the optional browser automation.
+  if (!executable) await repairRuntime();
+  else await ensurePlaywright({ onOutput: out, offline });
   if (!command) {
     // Option 8 toggles the stored preference and returns to the menu so the
     // user can adjust it and still launch in the same run.
@@ -68,22 +81,36 @@ async function main() {
   if (command === 'check-update') {
     const updates = await availableUpdate();
     const names = Object.keys(updates);
-    if (!names.length) return console.log(`\nRuntime is up to date (${manifest.dependencies['@anthropic-ai/claude-code']}).`);
+    // Playwright is checked separately: a failing lookup must not break the check.
+    let playwrightUpdate = null;
+    try { playwrightUpdate = await availablePlaywrightUpdate(); } catch (error) { console.log(`Playwright check skipped: ${error.message}`); }
+    const missingPlaywright = !playwrightStatus().ready;
+    if (!names.length && !playwrightUpdate && !missingPlaywright) {
+      return console.log(`\nRuntime is up to date (${manifest.dependencies['@anthropic-ai/claude-code']}).`);
+    }
     console.log('\nUpdate available:');
     for (const name of names) console.log(`  ${name}  ${updates[name].current} -> ${updates[name].latest}`);
+    if (playwrightUpdate) console.log(`  playwright  ${playwrightUpdate.current} -> ${playwrightUpdate.latest}`);
+    else if (missingPlaywright) console.log('  playwright  not installed');
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     const answer = await rl.question('Install this update now? [y/N] '); rl.close();
     if (!/^y(es)?$/i.test(answer.trim())) return console.log('Update skipped.');
     const previous = savePinnedVersions(Object.fromEntries(names.map(name => [name, updates[name].latest])));
+    let previousPlaywright = null;
     try {
-      await installRuntime({ onOutput: s => process.stdout.write(s) });
+      if (names.length) await installRuntime({ onOutput: out });
+      if (playwrightUpdate || missingPlaywright) {
+        previousPlaywright = playwrightUpdate ? savePlaywrightPin(playwrightUpdate.latest) : null;
+        await installPlaywright({ onOutput: out, force: !!playwrightUpdate });
+      }
     } catch (error) {
       savePinnedVersions(previous);
+      if (previousPlaywright !== null) savePlaywrightPin(previousPlaywright);
       throw error;
     }
     return;
   }
-  if (command === 'update') return installRuntime({ onOutput: s => process.stdout.write(s) });
+  if (command === 'update') return repairRuntime();
   if (command === 'rollback') return rollbackRuntime();
   if (command === 'local-setup') {
     const windows = process.platform === 'win32';

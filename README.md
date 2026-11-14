@@ -103,6 +103,8 @@ ClaudeCode-Portable/
 └── engine/                   Per-platform runtimes
     ├── node-<os>-<arch>/
     ├── git-win-x64/          PortableGit — only when no system Git for Windows exists
+    ├── playwright/           Browser automation package (pinned in tools/runtime-manifest.json)
+    ├── playwright-browsers/  Headless Chromium build for Playwright
     └── <os>-<arch>/current/
 ```
 
@@ -168,6 +170,8 @@ The model always comes from the active provider profile. Two launcher-only switc
 | `PORTABLE_AI_NO_PAUSE` | Do not pause on launcher errors (`START.bat`, `RESUME.bat`) |
 | `GIT_CONFIG_GLOBAL` | Overrides which Git configuration the session reads; by default the host `~/.gitconfig` is detected automatically |
 | `PORTABLE_AI_NO_HOST_GIT_CONFIG` | Set to `1` to stop linking the host Git configuration into sessions |
+| `PORTABLE_AI_NO_PLAYWRIGHT` | Set to `1` to skip the Playwright installation entirely |
+| `PLAYWRIGHT_BROWSERS_PATH` | Browser location; the launcher sets it to `engine/playwright-browsers` for its own installs |
 
 ---
 
@@ -355,6 +359,36 @@ When the active profile is **Ollama**, every terminal launch (`START.bat cli`, `
 If no bundled Ollama is installed, an external server is used as-is. Proxy activity is written to `data/logs/proxy.log` only, never to the terminal.
 
 An OpenAI-compatible provider that is not Ollama (LM Studio, custom gateways) keeps using the endpoint configured in the dashboard.
+
+---
+
+## Browser Automation (Playwright)
+
+Playwright is installed next to the runtime and travels with the drive: the npm package in `engine/playwright`, the browser builds in `engine/playwright-browsers`. Nothing is written to the user profile.
+
+| When | What happens |
+|---|---|
+| First launch | The pinned Playwright package and the headless Chromium build are installed, after the Claude Code runtime. |
+| Every launch | Only a quick check runs. Missing pieces are fetched; a complete installation costs no network access. |
+| Menu option 5 / `install` / `update` | Repairs both the runtime and Playwright. |
+| Menu option 7 / `check-update` | Reports a newer Playwright release next to the Claude Code updates and installs it with the same pin rollback. |
+| `--offline` | Skips every Playwright download. |
+| `PORTABLE_AI_NO_PLAYWRIGHT=1` | Disables Playwright entirely. |
+
+The version is pinned in `tools/runtime-manifest.json` (`"playwright": "1.65.1"`), because it decides which Chromium build is used — an unpinned update would download the browsers again. `--only-shell` installs the headless build only (~300 MB instead of ~750 MB). `--no-remove` is used so browser builds copied from another machine are not deleted; the `.links` file stores absolute paths, so after moving the folder run option 5 once.
+
+```bash
+# Windows
+set "PLAYWRIGHT_BROWSERS_PATH=%CD%\engine\playwright-browsers"
+engine\node-win32-x64\node.exe engine\playwright\node_modules\playwright\cli.js screenshot --viewport-size="1440,900" https://example.com shot.png
+```
+
+```js
+// From project code (ESM)
+import { chromium } from './engine/playwright/node_modules/playwright/index.mjs';
+```
+
+A failing Playwright install is a warning, never a startup error — Claude Code keeps working without it. `START.bat status` reports the Playwright state next to the runtime.
 
 ---
 
