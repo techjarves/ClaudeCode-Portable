@@ -139,6 +139,33 @@ test('SDK bridge forwards approval decisions, stores real session IDs and resume
   assert.equal(visible.find(event=>event.type==='message'&&event.role==='user').attachments[0].name,'screen.png');assert.equal(decisions[0].behavior,'allow');assert.equal(decisions[1].behavior,'deny');assert.equal(resumes[1],'sdk-session-123');assert.equal(store.get(s.id).sdkSessionId,'sdk-session-123');assert.equal(store.get(s.id).status,'completed');
   await assert.rejects(manager.start(s.id,'bad',{unrestricted:true}),/confirmation/);
 });
+test('attached images reach the model as real image blocks',async()=>{
+  saveProfile({...profile,provider:'lmstudio',baseUrl:PROVIDERS.lmstudio.baseUrl});const p=readConfig().profiles.lmstudio;
+  const store=new SessionStore(join(temp,'image-prompt-sessions')),s=store.create({workspace:temp,profile:p,trusted:true});
+  const prompts=[];
+  const manager=new AgentManager(store,{executable:()=>'/fake/claude',sdkLoader:async()=>({query:({prompt})=>{
+    prompts.push(prompt);const q=(async function*(){yield {type:'assistant',message:{id:'i',content:[{type:'text',text:'Seen.'}]}};yield {type:'result',is_error:false};})();q.close=()=>{};return q;
+  }})});
+  const image={id:'img-id',name:'shot.png',type:'image/png',size:12,path:'/private/shot.png',data:'iVBORw0KGgo='};
+  const doc={id:'doc-id',name:'notes.txt',type:'text/plain',size:5,path:'/private/notes.txt'};
+  await(await manager.start(s.id,'describe it',{attachments:[image,doc]})).promise;
+  // Images force the streamed prompt form, which is the only one that carries content blocks.
+  assert.equal(typeof prompts[0],'object','a streamed prompt is expected');
+  const messages=[];for await(const message of prompts[0])messages.push(message);
+  assert.equal(messages.length,1);
+  const content=messages[0].message.content;
+  assert.equal(messages[0].type,'user');assert.equal(messages[0].parent_tool_use_id,null);
+  assert.deepEqual(content[1],{type:'image',source:{type:'base64',media_type:'image/png',data:'iVBORw0KGgo='}});
+  // The text still names the plain file so the agent can open it.
+  assert.match(content[0].text,/notes\.txt/);assert.match(content[0].text,/describe it/);
+  assert.doesNotMatch(content[0].text,/shot\.png.*\/private\/shot\.png/);
+
+  // Without images the original single-string prompt is kept.
+  const plain=[];const plainManager=new AgentManager(store,{executable:()=>'/fake/claude',sdkLoader:async()=>({query:({prompt})=>{plain.push(prompt);const q=(async function*(){yield {type:'result',is_error:false};})();q.close=()=>{};return q;}})});
+  await(await plainManager.start(s.id,'no files')).promise;
+  assert.equal(typeof plain[0],'string');
+});
+
 test('OpenAI adapters resume the same native Claude conversation',async()=>{
   saveProfile(profile);const p=readConfig().profiles.custom;
   const store=new SessionStore(join(temp,'adapter-handoff-sessions')),s=store.create({workspace:temp,profile:p,trusted:true});const calls=[];let turn=0;

@@ -23,7 +23,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 | Local models | manual server start | **Ollama server + speed proxy started and stopped automatically** |
 | Runtime updates | manual | **`check-update` with pinned-version rollback** |
 | Community PRs | — | **two open upstream PRs adopted** (#43, #47) |
-| Tests | 50 | **86** |
+| Attachments | picker only, images as file paths | **paste, drop, and real image blocks** |
+| Tests | 50 | **90** |
 | Node.js pin | one location | launcher, POSIX launcher, CI matrix, `engines`, README |
 
 Upstream has one later commit, `dfdc58d` (a sponsor button), that this fork does not include.
@@ -102,6 +103,32 @@ Claude Code only knows Anthropic model IDs; any other ID warned "Model isn't rec
 - A permanent delete button for conversations, including the Claude history `.jsonl` behind a synced
   session (`d101ffb`).
 - The delete button stays visible in the sidebar for synced conversations (`247aeb1`).
+
+#### Paste and drop attachments in the studio
+
+Upstream only accepted files through the picker behind the **+** button.
+
+- **Paste** — a screenshot in the clipboard goes straight into the attachment list
+  (Ctrl+V / ⌘V in the composer). Text pastes are untouched.
+- **Drag and drop** — files can be dropped anywhere in the studio window; the composer highlights
+  as the drop target and a drop outside never navigates away from the page.
+- Pasted images arrive without a file name and often as `application/octet-stream`. The server now
+  detects the real format from the file's magic bytes (PNG, JPEG, GIF, WebP) and stores the type in
+  a metadata sidecar, so it survives a restart.
+- Images get their own 5 MB limit, because they travel to the model as base64 and providers cap them
+  far below the generic 10 MB.
+
+#### Images reach the model as image blocks
+
+Upstream passed attachments to the agent as local paths only, so a picture had to be opened by the
+agent with its file tools before the model could see it — and a model without tool support never saw
+it at all.
+
+- Attached images are now sent in the SDK's streamed prompt form as real `image` content blocks,
+  exactly what the Claude Code terminal does with a pasted screenshot.
+- Messages without images keep the original single-string prompt, so nothing about the text-only
+  path changes.
+- Verified end to end against the official runtime: the image block reaches the provider.
 
 #### Standalone session resume (`RESUME.bat`, `resume.sh`)
 
@@ -261,7 +288,7 @@ SDK warned on every turn.
 
 ### Tests
 
-50 → **86** test cases (`npm test`) against the upstream baseline, all passing, plus `npm run check`.
+50 → **90** test cases (`npm test`) against the upstream baseline, all passing, plus `npm run check`.
 The adopted pull requests contributed `tests/composer.test.mjs` and additions to
 `tests/backend.test.mjs`.
 

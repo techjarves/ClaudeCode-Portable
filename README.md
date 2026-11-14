@@ -49,6 +49,7 @@ App-owned runtimes, provider settings, chat history, attachments, caches, and lo
 | **Git Bash Handling** | Uses an installed Git for Windows; downloads PortableGit only when none is present |
 | **Local Speed Proxy** | Trims the ~10k-token system prompt for Ollama, cutting first-token latency on CPU hardware |
 | **Studio Dashboard** | Streaming chat, Markdown, code highlighting, compact tool steps, approvals, attachments, and diagnostics |
+| **Paste and Drop** | Paste a screenshot or drop files straight into the studio; images reach the model as real image blocks |
 | **Shared Claude History** | GUI and portable terminal sessions use real Claude Code conversation IDs and can resume the same history |
 | **Project + Normal Chats** | Work inside a selected folder or start an agent conversation without attaching a project |
 | **Provider Switching** | Switch directly between configured provider/model profiles from the composer |
@@ -295,6 +296,34 @@ Extended thinking is disabled automatically for adapter-backed providers because
 6. Discover the loaded model or enter its exact identifier.
 
 LM Studio is managed by its own application. The dashboard connects to its running local server.
+
+---
+
+## Images and Attachments
+
+### Studio dashboard
+
+Three ways to attach a file, all landing in the same list above the composer:
+
+| How | Notes |
+|---|---|
+| **Paste** — Ctrl+V / ⌘V in the message box | Compose or copy a screenshot, then paste. Text pastes are untouched. |
+| **Drag and drop** | Drop anywhere in the studio window; the composer shows where the files will go. |
+| **Attach button (+)** | Opens the file picker. |
+
+Limits: 10 files, 20 MB in total, 10 MB per file, and **5 MB per image** — images travel to the model as base64, which grows by a third, and providers cap them well below the generic limit.
+
+Attached **images** are sent as real image blocks, the same way the terminal attaches a clipboard screenshot, so a vision-capable model sees them without opening anything first. Other files stay paths in the prompt, which the agent inspects with its own tools.
+
+### Terminal
+
+The Claude Code terminal handles clipboard images itself:
+
+1. Copy or take a screenshot (Win+Shift+S, or the snipping tool).
+2. Press **Ctrl+V** in the Claude Code prompt — on macOS use **Ctrl+V**, not ⌘V.
+3. The image is saved to a temporary PNG and attached to your next message.
+
+Pasting into the terminal needs a clipboard tool: PowerShell with `System.Windows.Forms` on Windows, `xclip` or `wl-paste` on Linux, `osascript` on macOS. If nothing is pasted, check that tool first. `START.bat` and this project's environment do not interfere with it.
 
 ---
 

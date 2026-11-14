@@ -104,7 +104,8 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
             // Follow the stored bypass-permissions mode when the request does
             // not choose one; an explicit choice keeps its own confirmation.
             const permissions=resolveDashboardPermissions({permissionMode:body.permissionMode,confirmation:body.confirmation});
-            active=await manager.start(id,body.prompt,{...body,...permissions,attachments:resolveAttachments(id,body.attachments)},listener);
+            // Images are read here so the agent can send real image blocks.
+            active=await manager.start(id,body.prompt,{...body,...permissions,attachments:resolveAttachments(id,body.attachments,undefined,{withData:true})},listener);
           }
           else{active=manager.runs.get(id);if(!active)return json(res,409,{error:'No active turn to reconnect'});active.listeners.add(listener);}
           res.writeHead(200,{'Content-Type':'text/event-stream','Connection':'keep-alive','Cache-Control':'no-store'});

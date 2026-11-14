@@ -442,12 +442,52 @@ function renderAttachments(){
 }
 function fileBase64(file){return file.arrayBuffer().then(buffer=>{const bytes=new Uint8Array(buffer);let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(binary);});}
 async function uploadAttachments(){const files=await Promise.all(state.attachments.map(async file=>({name:file.name,type:file.type,data:await fileBase64(file)})));return (await api(`/api/sessions/${state.current.id}/attachments`,{files})).attachments;}
+const MAX_ATTACH_FILES=10,MAX_ATTACH_BYTES=10*1024*1024,MAX_IMAGE_BYTES=5*1024*1024,MAX_ATTACH_TOTAL=20*1024*1024;
+const isImageFile=file=>/^image\/(png|jpeg|gif|webp)$/.test(file.type||'');
+// A pasted screenshot arrives without a name, which the attachment list and the
+// server both need.
+function namedFile(file){
+  if(file.name)return file;
+  const extension=((file.type||'').split('/')[1]||'png').replace('jpeg','jpg').replace('svg+xml','svg');
+  return new File([file],`pasted-${new Date().toISOString().replace(/[:.]/g,'-')}.${extension}`,{type:file.type||'application/octet-stream',lastModified:Date.now()});
+}
+// Shared by the file picker, clipboard paste and drag and drop.
+function addFiles(incoming){
+  if(state.running||!!state.current?.legacy||requests.active){toast('Finish the current turn before attaching files.');return;}
+  const combined=[...state.attachments];
+  for(const raw of incoming){
+    const file=namedFile(raw),image=isImageFile(file),limit=image?MAX_IMAGE_BYTES:MAX_ATTACH_BYTES;
+    if(file.size>limit){toast(`${file.name} is larger than ${limit/1024/1024} MB.`);continue;}
+    if(combined.length>=MAX_ATTACH_FILES){toast(`You can attach up to ${MAX_ATTACH_FILES} files.`);break;}
+    if(!combined.some(saved=>saved.name===file.name&&saved.size===file.size&&saved.lastModified===file.lastModified))combined.push(file);
+  }
+  if(combined.reduce((sum,file)=>sum+file.size,0)>MAX_ATTACH_TOTAL){toast(`Attachments must total ${MAX_ATTACH_TOTAL/1024/1024} MB or less.`);return;}
+  state.attachments=combined;renderAttachments();
+}
 $('#attach-button').onclick=()=>$('#attachment-input').click();
 $('#attachment-input').onchange=()=>{
-  const incoming=[...$('#attachment-input').files],combined=[...state.attachments];$('#attachment-input').value='';
-  for(const file of incoming){if(file.size>10*1024*1024){toast(`${file.name} is larger than 10 MB.`);continue;}if(combined.length>=10){toast('You can attach up to 10 files.');break;}if(!combined.some(saved=>saved.name===file.name&&saved.size===file.size&&saved.lastModified===file.lastModified))combined.push(file);}
-  if(combined.reduce((sum,file)=>sum+file.size,0)>20*1024*1024){toast('Attachments must total 20 MB or less.');return;}state.attachments=combined;renderAttachments();
+  const incoming=[...$('#attachment-input').files];$('#attachment-input').value='';addFiles(incoming);
 };
+// Paste an image straight from the clipboard. Text pastes are left untouched.
+$('#prompt').addEventListener('paste',event=>{
+  const files=[...(event.clipboardData?.files||[])];
+  if(!files.length)return;
+  event.preventDefault();addFiles(files);
+});
+// Files can be dropped anywhere in the studio; the composer shows the state and
+// receives them. Dropping outside must never navigate away from the page.
+const hasFileDrag=event=>[...(event.dataTransfer?.types||[])].includes('Files');
+const composerElement=$('.composer');
+for(const type of ['dragenter','dragover'])window.addEventListener(type,event=>{
+  if(!hasFileDrag(event))return;
+  event.preventDefault();event.dataTransfer.dropEffect='copy';composerElement.classList.add('drop-target');
+});
+window.addEventListener('dragleave',event=>{if(hasFileDrag(event)&&!event.relatedTarget)composerElement.classList.remove('drop-target');});
+window.addEventListener('drop',event=>{
+  if(!hasFileDrag(event))return;
+  event.preventDefault();composerElement.classList.remove('drop-target');
+  const files=[...(event.dataTransfer?.files||[])];if(files.length)addFiles(files);
+});
 $('#stop').onclick=async()=>{try{await api(`/api/sessions/${state.current.id}/cancel`,{});}catch(e){toast(e.message);}};
 $$('[data-suggestion]').forEach(b=>b.onclick=()=>{$('#prompt').value=b.dataset.suggestion;$('#prompt').dispatchEvent(new Event('input'));$('#prompt').focus();});
 

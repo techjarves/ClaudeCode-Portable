@@ -57,3 +57,8 @@ dialog{border:1px solid var(--line);border-radius:14px;background:var(--surface)
 .composer-request.approval-request .request-footer{display:none}.has-request .composer-actions>.request-deny{margin-left:0;padding:7px 10px;border:1px solid var(--line);border-radius:8px;color:var(--muted);font-size:10px}.has-request .composer-actions>.request-deny:hover{border-color:var(--error);background:color-mix(in srgb,var(--error) 10%,transparent);color:var(--error)}.has-request .composer-actions{flex-shrink:0;flex-wrap:nowrap}.has-request .composer-context{min-width:0}.has-request .composer-bottom{align-items:center}
 .has-request .send-btn.request-send{width:auto;min-width:96px;height:34px;min-height:34px;padding:0 12px;border-radius:9px;display:flex;align-items:center;justify-content:center;gap:7px;font-size:11px;line-height:1;white-space:nowrap}
 @media(max-width:767px){.composer textarea{min-height:calc(3.1em + 17px);max-height:calc(7.75em + 17px);padding:12px 14px 5px}.composer-bottom{padding:5px 10px 8px}.has-request .composer-bottom{flex-wrap:wrap}.has-request .composer-context{flex-basis:100%}.has-request .composer-actions{width:100%;justify-content:flex-end}.has-request .composer-actions>.request-deny{margin-right:auto}}
+
+/* Drag and drop onto the composer: pasted and dropped files share one list. */
+.composer.drop-target{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-bg)}
+.composer.drop-target textarea{opacity:.45}
+.composer.drop-target::after{content:"Drop files or images to attach";position:absolute;inset:0;display:grid;place-items:center;border-radius:inherit;background:color-mix(in srgb,var(--surface) 74%,transparent);color:var(--accent);font-size:12px;font-weight:600;letter-spacing:.2px;pointer-events:none}
