@@ -54,9 +54,8 @@ bundled browser automation is there — it would have had to stumble over `engin
 
 #### The image-paste binding has no text fallback
 
-The 2.0 changelog claimed that `chat:imagePaste` "falls back to a normal text paste when the
-clipboard holds no image, so the extra binding cannot break pasting text". That is wrong, and the
-claim had to be corrected rather than left standing in a released section:
+The 2.0 section claimed that `chat:imagePaste` "falls back to a normal text paste when the
+clipboard holds no image, so the extra binding cannot break pasting text". That is wrong:
 
 - The handler reads the clipboard and calls the attach function only when it got an image:
   `yCe(rc(st())).then(Ct => { if (Ct) c(Ct.base64, …) })`. There is no `else`.
@@ -64,7 +63,9 @@ claim had to be corrected rather than left standing in a released section:
   "No image found in clipboard."
 - The README now states this and points text pasting at `Ctrl+Shift+V` or the context menu.
 
-The 2.0 section is left as published; this note records what actually happens.
+The 2.0 entry is corrected in place, and its mention of the `CtrlKeyShortcutsDisabled` registry
+value is gone as well: that setting disables console shortcuts for every console window on the
+machine, and this project should not recommend a system-wide change.
 
 ## [2.0] - 2026-11-14
 
@@ -186,10 +187,11 @@ clipboard therefore did nothing.
 - The launcher now merges `ctrl+v -> chat:imagePaste` into the profile's `keybindings.json`. Existing
   bindings and every other context survive; an explicit user choice (including an unbind) is never
   overwritten, and a file with a syntax error is left untouched.
-- Documented that **Alt+V** is the Windows shortcut and works in the classic console today, plus the two
-  ways to make `Ctrl+V` arrive there (Windows Terminal, or `CtrlKeyShortcutsDisabled`).
-- Without an image the action falls back to a normal text paste, so the extra binding cannot break
-  pasting text.
+- Documented that **Alt+V** is the Windows shortcut and works in the classic console today, plus
+  Windows Terminal as the one supported way to make `Ctrl+V` arrive there.
+- Without an image the action does nothing: the handler only calls the attach function when the
+  clipboard actually held an image, and reports "No image found in clipboard." There is no text
+  fallback, so text paste stays with Ctrl+Shift+V or the context menu.
 
 #### Playwright built into the install and update flow
 
