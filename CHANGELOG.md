@@ -94,6 +94,13 @@ inside the launcher batch file.
   environment, so browser and system integration are unaffected.
 - The provider environment filter still removes ambient credentials first, so a host
   `ANTHROPIC_API_KEY` cannot leak into a session.
+- **The host Git configuration stays linked in.** A redirected `HOME` hides `~/.gitconfig`, which
+  made an agent's `git commit` fail with "Author identity unknown". The session now receives
+  `GIT_CONFIG_GLOBAL` pointing at the host `~/.gitconfig` (or `~/.config/git/config`), resolved from
+  every available profile location — including `HOMEDRIVE`+`HOMEPATH`, so detection still works when
+  a session is started from an already redirected environment. This is a deliberate exception to
+  zero-footprint, and `git config --global` inside a session writes to that host file.
+  `PORTABLE_AI_NO_HOST_GIT_CONFIG=1` disables the link.
 
 #### Automatic Ollama server and speed proxy
 

@@ -7,7 +7,7 @@ import { join, dirname } from 'node:path';
 
 const temp = mkdtempSync(join(tmpdir(), 'portable-local-tests-'));
 process.env.PORTABLE_AI_DATA_DIR = join(temp, 'data');
-const { resolveGitBash, gitEnvironment, bundledGitBash } = await import('../lib/git.mjs');
+const { resolveGitBash, gitEnvironment, bundledGitBash, hostGitConfigPath } = await import('../lib/git.mjs');
 const { portableEnvironment, providerEnvironment } = await import('../lib/providers.mjs');
 const { trimSystemPrompt, trimAnthropicBody, trimOpenAIBody, createProxyServer } = await import('../tools/local-proxy.mjs');
 const { prepareLocalSession } = await import('../lib/local-session.mjs');
@@ -52,6 +52,43 @@ test('git environment exposes the bash path and prepends Git directories', () =>
   assert.match(env.PATH, /C:\\Windows$/);
   // No Git: keep the runtime defaults.
   assert.deepEqual(gitEnvironment({ exists: () => false, env: {}, platform: 'win32', findExecutable: () => '' }), {});
+});
+
+// ── Host Git configuration ─────────────────────────────────────────
+
+test('the host Git configuration survives the HOME redirect', () => {
+  const home = join(temp, 'host-home');
+  const config = join(home, '.gitconfig');
+  mkdirSync(home, { recursive: true });
+  writeFileSync(config, '[user]\n\tname = Host User\n');
+  // Found through the real user profile.
+  assert.equal(hostGitConfigPath({ env: { HOME: home } }), config);
+  // An explicit GIT_CONFIG_GLOBAL wins when it exists.
+  const explicit = join(temp, 'explicit-gitconfig');
+  writeFileSync(explicit, '');
+  assert.equal(hostGitConfigPath({ env: { HOME: home, GIT_CONFIG_GLOBAL: explicit } }), explicit);
+  // A stale path is ignored and detection falls back to the profile.
+  assert.equal(hostGitConfigPath({ env: { HOME: home, GIT_CONFIG_GLOBAL: join(temp, 'gone') } }), config);
+  // No profile and no config: nothing to point at.
+  assert.equal(hostGitConfigPath({ env: {}, exists: () => false }), null);
+  assert.equal(hostGitConfigPath({ env: { HOME: join(temp, 'nobody') } }), null);
+  // Opt-out keeps Git confined to the drive.
+  assert.equal(hostGitConfigPath({ env: { HOME: home, PORTABLE_AI_NO_HOST_GIT_CONFIG: '1' } }), null);
+});
+
+test('a provider environment points GIT_CONFIG_GLOBAL at the host, not the portable home', () => {
+  const home = join(temp, 'host-home-provider');
+  const config = join(home, '.gitconfig');
+  mkdirSync(home, { recursive: true });
+  writeFileSync(config, '[user]\n\tname = Host User\n');
+  // HOME is redirected by the portable environment, so detection must run on the
+  // parent environment; otherwise it would look in data/home/.gitconfig.
+  const env = providerEnvironment(
+    { provider: 'deepseek', auth: 'api', model: 'm', baseUrl: 'https://api.deepseek.com/anthropic', key: 'k' },
+    { parent: { HOME: home, PATH: 'C:\\Windows' } },
+  );
+  assert.equal(env.GIT_CONFIG_GLOBAL, config);
+  assert.equal(env.HOME, join(temp, 'data', 'home'));
 });
 
 // ── Zero footprint ─────────────────────────────────────────────────

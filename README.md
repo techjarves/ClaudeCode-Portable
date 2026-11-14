@@ -45,7 +45,7 @@ App-owned runtimes, provider settings, chat history, attachments, caches, and lo
 | **Official Claude Code** | Uses Anthropic's official CLI and Agent SDK — no replacement agent engine |
 | **9 AI Providers** | NVIDIA NIM · DeepSeek · OpenRouter · Google Gemini · Anthropic · OpenAI · Ollama · LM Studio · Custom API |
 | **Portable Runtime** | Node.js, Claude Code, caches, settings, and app data stay in the project folder |
-| **Zero Footprint** | `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA` and the XDG folders of every session point into `data/` |
+| **Zero Footprint** | `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA` and the XDG folders of every session point into `data/`; only the host Git config is linked back in, so commits keep your identity |
 | **Git Bash Handling** | Uses an installed Git for Windows; downloads PortableGit only when none is present |
 | **Local Speed Proxy** | Trims the ~10k-token system prompt for Ollama, cutting first-token latency on CPU hardware |
 | **Studio Dashboard** | Streaming chat, Markdown, code highlighting, compact tool steps, approvals, attachments, and diagnostics |
@@ -165,6 +165,8 @@ The model always comes from the active provider profile. Two launcher-only switc
 | `PORTABLE_AI_DATA_DIR` | Use a different data folder (default `<project>/data`) |
 | `PORTABLE_AI_NO_OPEN` | Do not open the browser when the dashboard starts |
 | `PORTABLE_AI_NO_PAUSE` | Do not pause on launcher errors (`START.bat`, `RESUME.bat`) |
+| `GIT_CONFIG_GLOBAL` | Overrides which Git configuration the session reads; by default the host `~/.gitconfig` is detected automatically |
+| `PORTABLE_AI_NO_HOST_GIT_CONFIG` | Set to `1` to stop linking the host Git configuration into sessions |
 
 ---
 
@@ -351,6 +353,7 @@ Interrupted installations are resumed: staged files are kept and reused on the n
 - Dashboard and adapter servers bind to `127.0.0.1` only.
 - Every session process gets `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` redirected into `data/`, so files it writes stay on the drive.
 - Claude Code needs Git Bash on Windows. An installed Git for Windows is used as-is; PortableGit is downloaded to `engine/git-win-x64/` only when none is found.
+- The session still reads your real Git configuration: `GIT_CONFIG_GLOBAL` points at `~/.gitconfig` (or `~/.config/git/config`), so `git commit` keeps your author identity and credential helper. **This is a deliberate exception to zero-footprint:** `git config --global` inside a session writes to that file. Set `PORTABLE_AI_NO_HOST_GIT_CONFIG=1` to keep Git fully confined to the drive.
 - Plain HTTP is allowed only for loopback, RFC 1918 LAN, IPv6 ULA/link-local, and link-local `169.254.0.0/16` hosts — which includes the cloud metadata address `169.254.169.254`. Traffic and API keys to those endpoints are unencrypted; use HTTPS or a trusted network.
 - Dashboard APIs require a fresh access token printed at launch.
 - Provider credentials are excluded from normal bootstrap/configuration responses.
