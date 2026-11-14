@@ -2,9 +2,10 @@
 
 All notable changes to ClaudeCode-Portable are documented here.
 
-This file describes how this branch differs from the upstream project it was forked from
-(`rainman74/ClaudeCode-Portable`, `main` at `247aeb1`). It is written from the perspective of a
-user who already knows the upstream launcher: only the differences are listed.
+This file describes how this fork differs from the official project it was forked from,
+[`techjarves/ClaudeCode-Portable`](https://github.com/techjarves/ClaudeCode-Portable), at commit
+`b3660fd`. It is written from the perspective of a user who already knows the upstream launcher:
+only the differences are listed.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
@@ -12,7 +13,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Summary
 
-| Area | Upstream | This branch |
+| Area | Upstream | This fork |
 |---|---|---|
 | Bundled Node.js | 24.21.0 | **26.13.1** (LTS "Lithium") |
 | Git for Windows | expected on the host | detected, **or downloaded automatically** |
@@ -20,17 +21,92 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 | Permission mode | per launch, always asked | **stored preference, default ON**, changeable permanently or per launch |
 | Host footprint | app data only | `HOME`/`AppData`/XDG of the session **redirected into `data/`** |
 | Local models | manual server start | **Ollama server + speed proxy started and stopped automatically** |
-| Tests | 54 | **84** |
+| Runtime updates | manual | **`check-update` with pinned-version rollback** |
+| Community PRs | — | **two open upstream PRs adopted** (#43, #47) |
+| Tests | 50 | **86** |
 | Node.js pin | one location | launcher, POSIX launcher, CI matrix, `engines`, README |
+
+Upstream has one later commit, `dfdc58d` (a sponsor button), that this fork does not include.
+
+---
+
+### Adopted community pull requests
+
+Two pull requests that are still **open** in the official repository were merged into this fork
+(commit `d1a6bf4`). They are listed here because a user of the official repository will not find
+them there.
+
+#### #43 — Preserve IME composition in the dashboard (by lux-liang)
+
+[PR #43](https://github.com/techjarves/ClaudeCode-Portable/pull/43)
+
+Pressing Enter while an input method editor (IME) is composing — Japanese, Chinese, Korean, and
+similar — submitted the message instead of confirming the composition.
+
+- New `dashboard/composer.js` with `isComposerSubmitKey(event, compositionActive)`, which treats
+  Enter as a submit only when Shift is not held, `event.isComposing` is false, and no composition
+  is active.
+- The composer uses it for its key handler, so Enter now ends the composition first and only the
+  next Enter sends.
+- Covered by `tests/composer.test.mjs`.
+
+#### #47 — Allow HTTP base URLs for private LAN hosts (by VikasRajput-18)
+
+[PR #47](https://github.com/techjarves/ClaudeCode-Portable/pull/47), fixes upstream issue #45
+
+The base-URL validator accepted plain HTTP only for `localhost`, `127.0.0.1` and `[::1]`, which made
+LM Studio, Ollama, or any other local server unreachable over a LAN address (for example
+`http://192.168.1.50:1234/v1`).
+
+- `isPrivateHost()` in `lib/config.mjs` accepts loopback, RFC 1918 (`10/8`, `172.16/12`,
+  `192.168/16`), link-local (`169.254/16`) and IPv6 ULA/link-local (`fc00::/7`, `fe80::/10`)
+  addresses over HTTP.
+- Remote hosts still require HTTPS, and URLs with credentials, query strings or fragments remain
+  rejected.
+- The security trade-off is documented in the README (`2efb954`).
+
+The code from both pull requests is included as authored — `dashboard/composer.js` and the
+`isPrivateHost()` helper match the PR branches exactly. The fork only merged them into a single
+commit and rebased them onto its own history.
 
 ---
 
 ### Added
 
+#### Runtime update check with rollback (`check-update`, menu option 7)
+
+Upstream shipped a pinned runtime with no way to move it forward short of a manual reinstall.
+
+- `availableUpdate()` compares the pinned Claude Code and Agent SDK versions with npm
+  (`lib/runtime.mjs`).
+- `savePinnedVersions()` writes the new pins before installing and restores them if the install
+  fails, so a bad release cannot leave the launcher pointing at a broken version.
+- Exposed as `START.bat check-update` / `./start.sh check-update` and menu option 7.
+- Includes the README documentation for the update flow, model windows and runtime resume
+  (`6e2fd1d`, `4b86741`).
+
+#### Custom model windows and model-picker mapping
+
+Claude Code only knows Anthropic model IDs; any other ID warned "Model isn't recognized", assumed a
+200K window and exposed reduced capabilities.
+
+- `profileSettings()` writes a `modelPicker` row for custom model IDs, so Claude Code treats them as
+  a known model.
+- `CLAUDE_CODE_MAX_CONTEXT_TOKENS` carries the window declared in the dashboard, so the declared
+  value stays authoritative for IDs mapped to a different native window.
+- The settings file of the profile's `CLAUDE_CONFIG_DIR` is merged, never replaced, because Claude
+  Code stores its own keys there.
+
+#### Dashboard conversation management
+
+- A permanent delete button for conversations, including the Claude history `.jsonl` behind a synced
+  session (`d101ffb`).
+- The delete button stays visible in the sidebar for synced conversations (`247aeb1`).
+
 #### Standalone session resume (`RESUME.bat`, `resume.sh`)
 
 Upstream only offered `START.bat resume <session-id>`, which still ran the full launcher: runtime
-checks, provider setup, update handling. This branch adds a resume path that does exactly one thing.
+checks, provider setup, update handling. This fork adds a resume path that does exactly one thing.
 
 - `RESUME.bat` (Windows) and `resume.sh` (Linux/macOS) are self-contained entry points.
 - They verify that Node.js, the Claude Code executable and `data/settings.json` exist, and fail with
@@ -51,7 +127,7 @@ New files: `RESUME.bat`, `resume.sh`, `lib/resume.mjs`, `tools/resume.mjs`, `tes
 
 #### Bypass permissions as a stored setting (default ON)
 
-Upstream chose the mode in an interactive menu on every launch. This branch stores it, so the
+Upstream chose the mode in an interactive menu on every launch. This fork stores it, so the
 launcher, the resume path and the studio agree, and the choice survives restarts.
 
 - Stored as `preferences.bypassPermissions` in `data/settings.json`; **missing value means ON**.
@@ -185,7 +261,9 @@ SDK warned on every turn.
 
 ### Tests
 
-54 → **84** test cases (`npm test`), all passing, plus `npm run check`.
+50 → **86** test cases (`npm test`) against the upstream baseline, all passing, plus `npm run check`.
+The adopted pull requests contributed `tests/composer.test.mjs` and additions to
+`tests/backend.test.mjs`.
 
 New suites: `tests/resume.test.mjs`, `tests/permissions.test.mjs`, `tests/local.test.mjs`.
 Regression tests were added for the three bugs above and for the permission behaviour of both the
