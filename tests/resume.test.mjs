@@ -81,6 +81,19 @@ test('rejects duplicates, missing values, unknown flags and bad IDs', () => {
   assert.throws(() => parseResumeArgs(['--cwd', join(projectRoot, 'nope')], { projectRoot }), /Working directory not found/);
 });
 
+test('repairs a path whose trailing backslash escaped the closing quote', { skip: process.platform !== 'win32' && 'Windows-only argument mangling' }, () => {
+  // `RESUME.bat --cwd "D:\...\workspace\"` reaches Node as D:\...\workspace":
+  // the backslash swallows the closing quote. Windows forbids " in paths, so
+  // the quote is always an artifact and can be dropped.
+  assert.deepEqual(parseResumeArgs(['--cwd', `${workspace}"`], { projectRoot }), parsed(null, workspace));
+  assert.deepEqual(parseResumeArgs(['--resume', 'abc', '--cwd', `${workspace}"`], { projectRoot }), parsed('abc', workspace));
+  // The same repair applies to a positional directory and to a session ID.
+  assert.deepEqual(parseResumeArgs([`${workspace}"`], { projectRoot }), parsed(null, workspace));
+  assert.deepEqual(parseResumeArgs(['abc"'], { projectRoot }), parsed('abc', projectRoot));
+  // A lone quote becomes an empty value and is reported as missing.
+  assert.throws(() => parseResumeArgs(['--cwd', '"'], { projectRoot }), /Missing working directory/);
+});
+
 test('builds unrestricted resume, continue and fresh-session arguments', () => {
   assert.deepEqual(buildResumeArguments({ model: 'm' }, 'session-1'), ['--model', 'm', '--dangerously-skip-permissions', '--resume', 'session-1']);
   assert.deepEqual(buildResumeArguments({ model: 'm' }, null), ['--model', 'm', '--dangerously-skip-permissions', '--continue']);

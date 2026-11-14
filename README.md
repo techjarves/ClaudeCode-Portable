@@ -257,6 +257,7 @@ Notes:
 
 - Run `START.bat` / `start.sh` at least once first — the resume entry points install, repair, and update nothing. They print a clear error when the portable Node.js runtime, the Claude Code executable, or the provider configuration is missing.
 - Session ID and working directory can be combined in any order; duplicate `--resume` / `--cwd` values, unknown `--flags`, and malformed session IDs are rejected with an error.
+- A directory may end in a backslash: `--cwd "D:\Projects\my-app\"` works like `--cwd "D:\Projects\my-app"`. Windows hands such arguments over as `D:\Projects\my-app"` (the backslash escapes the closing quote); since Windows forbids `"` in file names, the resume parser drops the stray quote.
 - Without an ID, an empty history falls back to a new session after a warning.
 - For approval prompts in a resumed session, add `--safe` (one launch) or run `START.bat permissions off` (permanent) — see [Permission Mode](#permission-mode-bypass-permissions).
 
