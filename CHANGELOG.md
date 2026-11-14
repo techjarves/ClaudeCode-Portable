@@ -31,34 +31,6 @@ an HTTP page, so a picture or a report had to be found by hand.
 - Fenced code blocks still keep plain text so copying works; the earlier rule skipped inline code
   as well, which left the most common way of writing a path unclickable.
 - Web links open in a new tab and never navigate the studio away.
-#### Clickable paths in the terminal
-
-Claude Code emits OSC 8 hyperlinks for paths and URLs, but only in terminals it recognises. Windows
-sets no identifier in the classic console, so nothing was clickable there.
-
-- Documented that **Windows Terminal** works automatically (Ctrl+Click) because it exports
-  `WT_SESSION`, while the classic console does not.
-- `PORTABLE_AI_HYPERLINKS=1` exports `FORCE_HYPERLINK=1` for users who want the escape sequences
-  forced in other terminals. It stays opt-in: without OSC 8 support they would print as noise.
-- `WT.bat` starts the studio in Windows Terminal, so the paths are clickable there without the user
-  having to open the terminal and type the launcher name first.
-
-#### Why Ctrl+V pasted text but not images
-
-The launcher has been writing `ctrl+v → chat:imagePaste` into `keybindings.json` since the image-paste
-support landed. The file was correct, yet the shortcut did nothing, and the cause is the terminal
-rather than Claude Code:
-
-- A terminal that claims Ctrl+V for its own paste handles the key and pastes text. Claude Code never
-  sees the keystroke, so no binding — default or custom — can fire.
-- The classic console hard-codes that behaviour and cannot be reconfigured.
-- Windows Terminal does not bind Ctrl+V by itself: its default for paste is `Ctrl+Shift+V`. A
-  `ctrl+v` entry added to `settings.json` takes the key away again.
-- Alt+V keeps working because no terminal claims it.
-
-Documented in the README with the exact `keybindings` entry to remove; with Ctrl+V unbound the key
-reaches Claude Code, image paste works, and text paste moves to Ctrl+Shift+V. The action has no text
-fallback, so Ctrl+V with no image in the clipboard does nothing.
 
 #### Sessions learn that Playwright exists
 

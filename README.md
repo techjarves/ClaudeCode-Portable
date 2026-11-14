@@ -171,7 +171,6 @@ The model always comes from the active provider profile. Two launcher-only switc
 | `GIT_CONFIG_GLOBAL` | Overrides which Git configuration the session reads; by default the host `~/.gitconfig` is detected automatically |
 | `PORTABLE_AI_NO_HOST_GIT_CONFIG` | Set to `1` to stop linking the host Git configuration into sessions |
 | `PORTABLE_AI_NO_PLAYWRIGHT` | Set to `1` to skip the Playwright installation entirely |
-| `PORTABLE_AI_HYPERLINKS` | Set to `1` to force OSC 8 hyperlinks in the terminal (exports `FORCE_HYPERLINK=1`) |
 | `PLAYWRIGHT_BROWSERS_PATH` | Browser location; the launcher sets it to `engine/playwright-browsers` for its own installs |
 
 ---
@@ -393,47 +392,6 @@ Local paths in a reply or a tool's output are clickable and open with your own a
 
 A browser cannot start a local file from an HTTP page, so the click goes to the token-protected `POST /api/open`, which checks that the path is absolute and exists and then hands it to `explorer.exe` (Windows), `open` (macOS) or `xdg-open` (Linux). The path is passed as a single argument, never through a shell, so characters like `&` or quotes cannot become a command.
 
-### Terminal
-
-Claude Code renders local paths and URLs as OSC 8 hyperlinks, which terminals show clickable. It only does so in terminals it recognises:
-
-| Terminal | Clickable paths |
-|---|---|
-| **Windows Terminal** | Yes, automatically — Ctrl+Click opens the path. |
-| Classic console (`conhost`) | No: it sets no identifier, so Claude Code sends no escape sequences. |
-| macOS Terminal, iTerm2, kitty, Warp, Ghostty, VS Code | Yes. |
-
-`WT.bat` starts the studio in Windows Terminal (use `WT.bat resume` for a session). To force the escape sequences in another terminal, set `PORTABLE_AI_HYPERLINKS=1` before launching — it exports `FORCE_HYPERLINK=1`. Terminals without OSC 8 support will print the sequences as visible noise, which is why this is not enabled by default.
-
-### Pasting images: Ctrl+V vs Alt+V
-
-Claude Code binds image paste to **Alt+V** on Windows and to Ctrl+V everywhere else. The launcher writes
-`ctrl+v → chat:imagePaste` into `keybindings.json` in the profile directory, so the familiar shortcut
-works too — but only where the terminal lets the key through.
-
-**A terminal that claims Ctrl+V for its own paste eats the key.** Claude Code never sees it, so the
-binding cannot fire. This is the normal case:
-
-| Where | Ctrl+V | Result |
-|---|---|---|
-| Classic console (`conhost`) | Always the console's text paste, not configurable | Image paste: **Alt+V** only |
-| Windows Terminal, default settings | Bound to `paste` in `keybindings` | Image paste: **Alt+V** only |
-| Windows Terminal, Ctrl+V unbound | Reaches Claude Code | Image paste: **Ctrl+V**, text paste: **Ctrl+Shift+V** |
-
-Windows Terminal does not bind Ctrl+V by itself — its default for paste is `Ctrl+Shift+V`. A `ctrl+v`
-entry in `settings.json` was added by the user, and the terminal then pastes text instead of forwarding
-the key. To hand Ctrl+V to Claude Code, remove that entry:
-
-```json
-"keybindings": [
-    { "id": "User.paste", "keys": "ctrl+v" }   // remove this entry
-]
-```
-
-Then restart Windows Terminal. `Ctrl+Shift+V` keeps pasting text, and `Ctrl+V` pastes an image — or
-does nothing when the clipboard holds no image, because the action has no text fallback.
-
----
 
 ## Browser Automation (Playwright)
 
