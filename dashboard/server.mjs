@@ -132,6 +132,12 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
         // friends, and rejects anything that is not a file URL.
         let target=requested;
         if(/^file:/i.test(requested)){
+          let parsed;
+          try{parsed=new URL(requested);}catch{throw new Error('Invalid file URL');}
+          // `file:`, `file://` and `file:///` name no path at all. On POSIX
+          // fileURLToPath() turns them into `/`, which would open the root in
+          // the file manager instead of failing; reject them before converting.
+          if(parsed.pathname.replace(/^\/+/,'')===''&&!parsed.hostname)throw new Error('Invalid file URL');
           try{target=fileURLToPath(requested);}catch{throw new Error('Invalid file URL');}
         }
         if(!isAbsolute(target))throw new Error('Only absolute local paths can be opened');

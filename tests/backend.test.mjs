@@ -118,7 +118,11 @@ test('dashboard blocks unauthenticated, cross-origin and rebinding requests',asy
   // itself is not a local file and is rejected as invalid.
   const unc=await open('file://portable-nowhere/share/x.txt');
   assert.equal(unc.error,process.platform==='win32'?'That path does not exist':'Invalid file URL');
+  // An empty file URL names no path. POSIX decodes all three to `/`, so without
+  // this guard the endpoint would open the filesystem root quite happily.
   assert.equal((await open('file:')).error,'Invalid file URL');
+  assert.equal((await open('file://')).error,'Invalid file URL');
+  assert.equal((await open('file:///')).error,'Invalid file URL');
   assert.equal((await open('relative.txt')).error,'Only absolute local paths can be opened');
   assert.equal((await open('')).error,'Invalid path');
   assert.equal((await fetch(`${app.origin}/api/config`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'text/plain'},body:'{}'})).status,415);

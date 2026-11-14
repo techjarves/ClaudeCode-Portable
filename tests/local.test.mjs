@@ -11,7 +11,7 @@ const { resolveGitBash, gitEnvironment, bundledGitBash, hostGitConfigPath } = aw
 const { portableEnvironment, providerEnvironment } = await import('../lib/providers.mjs');
 const { trimSystemPrompt, trimAnthropicBody, trimOpenAIBody, createProxyServer } = await import('../tools/local-proxy.mjs');
 const { prepareLocalSession } = await import('../lib/local-session.mjs');
-const { proxyStatus, ollamaUpstream, localStatus } = await import('../lib/local-models.mjs');
+const { proxyStatus, ollamaUpstream, localStatus, waitForProxy } = await import('../lib/local-models.mjs');
 const { PLAYWRIGHT_BROWSERS_DIR } = await import('../lib/playwright.mjs');
 
 test.after(() => rmSync(temp, { recursive: true, force: true }));
@@ -351,6 +351,23 @@ test('a foreign service on the proxy port is not adopted', async () => {
   } finally {
     await Promise.all([foreign, other, wrongUpstream].map(s => new Promise(r => s.close(r))));
   }
+});
+
+test('the readiness poll verifies the requested upstream and stops on a dead child', async () => {
+  // Two launches may point at different Ollama servers using the same proxy
+  // port. The second spawns, loses the bind, and its child exits; the poll must
+  // then fail instead of adopting the first launch's proxy.
+  const dead = { exitCode: 1 };
+  const seen = [];
+  const rejecting = async ({ upstream }) => { seen.push(upstream); return false; };
+  const started = Date.now();
+  assert.equal(await waitForProxy(5000, { upstream: 'http://10.0.0.9:11434', child: dead, status: rejecting, pollMs: 5 }), false);
+  assert.ok(Date.now() - started < 1000, 'an exited child ends the poll instead of waiting out the timeout');
+  assert.deepEqual(seen, ['http://10.0.0.9:11434'], 'the poll checks the upstream this profile asked for');
+
+  // A proxy that does answer for that upstream is still accepted.
+  const accepting = async ({ upstream }) => upstream === 'http://10.0.0.9:11434';
+  assert.equal(await waitForProxy(1000, { upstream: 'http://10.0.0.9:11434', child: dead, status: accepting, pollMs: 5 }), true);
 });
 
 test('a foreign service on the Ollama port is not treated as Ollama', async t => {
