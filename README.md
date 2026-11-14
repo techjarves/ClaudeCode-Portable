@@ -92,7 +92,7 @@ ClaudeCode-Portable/
 ├── resume.sh                 Standalone session resume (Linux/macOS)
 │
 ├── dashboard/                Browser studio interface
-├── lib/                      Providers, adapters, sessions, runtime, Git, and agent bridge
+├── lib/                      Providers, adapters, sessions, runtime, Git, Playwright, and agent bridge
 ├── tests/                    Automated, smoke, live-provider, and UI fixture tests
 ├── tools/                    Launcher, runtime manifest, checks, speed proxy, and local-model setup
 │
