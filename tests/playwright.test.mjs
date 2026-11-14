@@ -7,6 +7,7 @@ import { manifest } from '../lib/runtime.mjs';
 import {
   availablePlaywrightUpdate,
   ensurePlaywright,
+  expectedBrowserBuilds,
   installPlaywright,
   playwrightBrowsersPresent,
   playwrightPackageVersion,
@@ -32,6 +33,13 @@ function workspace(name) {
       const version = args.find(arg => String(arg).startsWith('playwright@')).split('@')[1];
       mkdirSync(join(directory, 'node_modules', 'playwright'), { recursive: true });
       writeFileSync(join(directory, 'node_modules', 'playwright', 'package.json'), JSON.stringify({ version }));
+      // The real package ships these revisions; the browser directory is named
+      // after them, which is what readiness is compared against.
+      mkdirSync(join(directory, 'node_modules', 'playwright-core'), { recursive: true });
+      writeFileSync(join(directory, 'node_modules', 'playwright-core', 'browsers.json'), JSON.stringify({ browsers: [
+        { name: 'chromium', revision: '1255' },
+        { name: 'chromium-headless-shell', revision: '1255' },
+      ] }));
       writeFileSync(cli, '// playwright cli');
     }
     if (args[1] === 'install' || args.includes('--only-shell')) {
@@ -75,6 +83,23 @@ test('installing pins the package and fetches only the headless shell', async ()
   assert.ok(browserCall.args.includes('--no-remove'), 'browsers from another machine must survive');
   assert.equal(browserCall.options.env.PLAYWRIGHT_BROWSERS_PATH, space.browsersDirectory);
   assert.match(output.join(''), /Installing the headless Chromium build/);
+});
+
+test('an older Chromium revision is not mistaken for a ready installation', async () => {
+  // An interrupted upgrade can leave the pinned package in place with only the
+  // previous browser build. Any `chromium*` directory used to count as ready,
+  // so ensurePlaywright() skipped the repair and every launch failed instead.
+  const space = workspace('stale-revision');
+  await installPlaywright({ ...space });
+  assert.equal(playwrightStatus(space).ready, true);
+
+  // Replace the build with the previous revision, as an interrupted upgrade would.
+  rmSync(join(space.browsersDirectory, 'chromium_headless_shell-1255'), { recursive: true });
+  mkdirSync(join(space.browsersDirectory, 'chromium_headless_shell-1187'), { recursive: true });
+
+  assert.equal(playwrightBrowsersPresent(space.browsersDirectory, { packageDirectory: space.directory }), false);
+  assert.equal(playwrightStatus(space).ready, false, 'the expected revision is missing');
+  assert.deepEqual(expectedBrowserBuilds(space.directory).map(build => build.directory), ['chromium-1255', 'chromium_headless_shell-1255']);
 });
 
 test('an installed, pinned package skips the npm step but still verifies browsers', async () => {

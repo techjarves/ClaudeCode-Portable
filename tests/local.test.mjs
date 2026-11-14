@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, request as httpRequest } from 'node:http';
-import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 
@@ -11,7 +11,7 @@ const { resolveGitBash, gitEnvironment, bundledGitBash, hostGitConfigPath } = aw
 const { portableEnvironment, providerEnvironment } = await import('../lib/providers.mjs');
 const { trimSystemPrompt, trimAnthropicBody, trimOpenAIBody, createProxyServer } = await import('../tools/local-proxy.mjs');
 const { prepareLocalSession } = await import('../lib/local-session.mjs');
-const { proxyStatus, ollamaUpstream, localStatus, waitForProxy } = await import('../lib/local-models.mjs');
+const { proxyStatus, ollamaUpstream, localStatus, waitForProxy, registerLocalConsumer, releaseLocalConsumer } = await import('../lib/local-models.mjs');
 const { PLAYWRIGHT_BROWSERS_DIR } = await import('../lib/playwright.mjs');
 
 test.after(() => rmSync(temp, { recursive: true, force: true }));
@@ -353,6 +353,52 @@ test('a foreign service on the proxy port is not adopted', async () => {
   }
 });
 
+test('a shared server or proxy is only stopped by the last session using it', () => {
+  // Two terminals, same Ollama profile: the second adopts both processes. The
+  // first to exit used to stop them and broke the second.
+  const file = join(temp, 'consumers.json');
+  const alive = () => true;
+  const a = 41001, b = 41002;
+
+  registerLocalConsumer('server', { pid: a, childPid: 51001, file, alive });
+  registerLocalConsumer('proxy', { pid: a, childPid: 51002, file, alive });
+  registerLocalConsumer('server', { pid: b, file, alive });
+  registerLocalConsumer('proxy', { pid: b, file, alive });
+
+  // The first session leaves: the processes must survive for the second.
+  const firstServer = releaseLocalConsumer('server', { pid: a, file, alive });
+  const firstProxy = releaseLocalConsumer('proxy', { pid: a, file, alive });
+  assert.equal(firstServer.others, 1, 'the second session still needs the server');
+  assert.equal(firstProxy.others, 1, 'the second session still needs the proxy');
+  assert.equal(firstServer.childPid, 51001, 'the serving process stays recorded');
+
+  // The last session leaves and is told which process it may now stop, even
+  // though the spawning session is long gone.
+  const lastServer = releaseLocalConsumer('server', { pid: b, file, alive });
+  const lastProxy = releaseLocalConsumer('proxy', { pid: b, file, alive });
+  assert.equal(lastServer.others, 0);
+  assert.equal(lastProxy.others, 0);
+  assert.equal(lastServer.childPid, 51001);
+  assert.equal(lastProxy.childPid, 51002);
+
+  // The recorded pids are gone once nobody uses them: a reused pid must never
+  // become a kill target for a later session.
+  const state = JSON.parse(readFileSync(file, 'utf8'));
+  assert.deepEqual(state.owners, {});
+  assert.deepEqual(state.consumers, []);
+});
+
+test('a consumer that died without cleanup is pruned', () => {
+  // A killed terminal never releases its claim; a stale pid must not keep the
+  // processes alive forever.
+  const file = join(temp, 'consumers-stale.json');
+  registerLocalConsumer('proxy', { pid: 42001, childPid: 52001, file, alive: () => true });
+  registerLocalConsumer('proxy', { pid: 42002, file, alive: () => true });
+  const result = releaseLocalConsumer('proxy', { pid: 42002, file, alive: pid => pid !== 42001 });
+  assert.equal(result.others, 0, 'the dead consumer no longer counts');
+  assert.equal(result.childPid, 52001, 'the recorded process is still reported');
+});
+
 test('the readiness poll verifies the requested upstream and stops on a dead child', async () => {
   // Two launches may point at different Ollama servers using the same proxy
   // port. The second spawns, loses the bind, and its child exits; the poll must
@@ -409,9 +455,14 @@ test('an external server or a failed proxy never blocks the session', async () =
     hasServer: () => true,
     startServer: async () => ({ alreadyRunning: true }),
     startSpeedProxy: async () => ({ alreadyRunning: true, url: 'http://127.0.0.1:11435' }),
-    stopServer: () => stops.push('server'),
-    stopSpeedProxy: () => stops.push('proxy'),
+    stopServer: options => stops.push({ role: 'server', options }),
+    stopSpeedProxy: options => stops.push({ role: 'proxy', options }),
   });
   await tracking.cleanup();
-  assert.deepEqual(stops, [], 'processes we did not start are left alone');
+  // A process we adopted is released, never stopped unconditionally: another
+  // terminal may still be using it, so the decision moves into the registry.
+  assert.deepEqual(stops, [
+    { role: 'proxy', options: { release: true } },
+    { role: 'server', options: { release: true } },
+  ], 'cleanup releases the claim instead of stopping a shared process');
 });
