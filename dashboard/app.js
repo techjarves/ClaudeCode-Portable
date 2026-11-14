@@ -5,11 +5,12 @@ import { icon, hydrateIcons } from '/icons.js';
 import { ComposerRequests } from '/requests.js';
 import { isComposerSubmitKey } from '/composer.js';
 import { linkifyElement } from '/links.js';
+import { permissionModeAfterRun } from '/permission-turn.js';
 
 const $=s=>document.querySelector(s);
 const $$=s=>[...document.querySelectorAll(s)];
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const state={config:{profiles:{}},providers:{},sessions:[],legacy:[],current:null,workspace:'',projectless:true,expandedProjects:new Set(),runtime:{},responseTimeoutMs:120000,page:'studio',selectedProvider:'anthropic',models:[],attachments:[],running:false,runStatus:'idle',runStartedAt:null,runTimer:null,lastRunDurationMs:0,followOutput:true,durationNote:null,permissionMode:'default',activePermissionMode:'default',streaming:null,waiting:null,tools:new Map(),thinking:new Map(),seenEvents:new Set(),requestController:null};
+const state={config:{profiles:{}},providers:{},sessions:[],legacy:[],current:null,workspace:'',projectless:true,expandedProjects:new Set(),runtime:{},responseTimeoutMs:120000,page:'studio',selectedProvider:'anthropic',models:[],attachments:[],running:false,runStatus:'idle',runStartedAt:null,runTimer:null,lastRunDurationMs:0,followOutput:true,durationNote:null,permissionMode:'default',activePermissionMode:'default',defaultPermissionMode:'default',permissionPickedForNextTurn:false,streaming:null,waiting:null,tools:new Map(),thinking:new Map(),seenEvents:new Set(),requestController:null};
 let token=new URLSearchParams(location.hash.slice(1)).get('token')||sessionStorage.getItem('portable-token')||'';
 if(token){sessionStorage.setItem('portable-token',token);history.replaceState(null,'',location.pathname);}
 const profile=()=>state.config.profiles[state.config.active];
@@ -89,7 +90,11 @@ $$('[data-permission]').forEach(button=>button.onclick=async()=>{
     const confirmed=await dialog({title:'Allow unrestricted actions?',html:'<p>The next turn can change files and execute commands without approval. This does not restrict the agent to your workspace. Use only in an isolated environment you trust.</p><label for="confirmation-input">Type UNRESTRICTED to continue<input id="confirmation-input" required pattern="UNRESTRICTED" autocomplete="off"></label>',confirm:'Enable for next turn',value:()=>$('#confirmation-input').value==='UNRESTRICTED'});
     if(!confirmed)return;
   }
-  state.permissionMode=mode;updateHeader();toast(state.running?`${permissionNames[mode]} selected for the next turn. The current turn is unchanged.`:`Permissions: ${permissionNames[mode]}.`);
+  state.permissionMode=mode;
+  // Remembered so the reset after the run knows this was a deliberate choice
+  // for the next turn, not a leftover of the turn that just ended.
+  if(state.running)state.permissionPickedForNextTurn=true;
+  updateHeader();toast(state.running?`${permissionNames[mode]} selected for the next turn. The current turn is unchanged.`:`Permissions: ${permissionNames[mode]}.`);
 });
 $('#settings-permissions').onclick=()=>{setPage('studio');openPermissions();};
 
@@ -459,25 +464,43 @@ function renderEvent(event,replay=false,sessionId=state.current?.id){
 async function consumeRun(path,body,sessionId=state.current?.id){
   const controller=new AbortController();state.requestController=controller;
   if(body&&state.current?.id===sessionId)setRunStatus('queued');
+  let accepted=false;
   try{
     const res=await fetch(path,{method:body?'POST':'GET',headers:{'X-Portable-Token':token,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),signal:controller.signal});
     if(!res.ok){const err=await res.json();throw new Error(err.error||'Could not start the agent');}
+    // The turn runs from here on. A request the server rejected never consumed
+    // a one-off permission choice, so the caller must not reset it.
+    accepted=true;
     const reader=res.body.getReader(),decoder=new TextDecoder();let buffer='';
     while(true){const {done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let n;while((n=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,n);buffer=buffer.slice(n+2);const data=frame.split('\n').filter(l=>l.startsWith('data:')).map(l=>l.slice(5).trim()).join('\n');if(data)renderEvent(JSON.parse(data),false,sessionId);}}
     if(state.current?.id===sessionId&&state.running)setRunStatus('interrupted','Connection ended. Reopen this session to reconnect.');
   }catch(e){if(e.name!=='AbortError'&&state.current?.id===sessionId)setRunStatus('failed',e.message);}
   finally{if(state.requestController===controller)state.requestController=null;await refreshSessions().catch(()=>{});}
+  return accepted;
 }
 $('#composer').onsubmit=async e=>{
   e.preventDefault();if(requests.active){await requests.submit();return;}if(state.running)return;const written=$('#prompt').value.trim();if(!written&&!state.attachments.length)return;
+  let runMode=state.permissionMode,runStarted=false;
   try{
     if(!await ensureSession())return;
     const uploaded=state.attachments.length?await uploadAttachments():[];
     const prompt=written||'Please inspect the attached files and help me continue this project.';
     state.attachments=[];renderAttachments();state.followOutput=true;$('#prompt').value='';$('#prompt').style.height='';setPage('studio');state.activePermissionMode=state.permissionMode;scrollConversation(true);
-    const sessionId=state.current.id;
-    await consumeRun(`/api/sessions/${sessionId}/run`,{prompt,attachments:uploaded.map(file=>file.id),permissionMode:state.permissionMode,...(state.permissionMode==='bypassPermissions'?{confirmation:'UNRESTRICTED'}:{})},sessionId);
+    const sessionId=state.current.id;runMode=state.permissionMode;
+    // Only a turn the server actually accepted consumes the one-off choice.
+    runStarted=await consumeRun(`/api/sessions/${sessionId}/run`,{prompt,attachments:uploaded.map(file=>file.id),permissionMode:runMode,...(runMode==='bypassPermissions'?{confirmation:'UNRESTRICTED'}:{})},sessionId)===true;
   }catch(err){toast(err.message);}
+  finally{
+    // A one-off override ends with the turn it was chosen for, whether the turn
+    // succeeded or failed; leaving it in place would keep sending the
+    // UNRESTRICTED confirmation to every later run. A send that never reached a
+    // turn keeps the choice, because it still belongs to the next turn.
+    if(runStarted){
+      const after=permissionModeAfterRun({runMode,currentMode:state.permissionMode,defaultMode:state.defaultPermissionMode,pickedDuringRun:state.permissionPickedForNextTurn===true});
+      state.permissionPickedForNextTurn=false;
+      if(after.reset){state.permissionMode=after.mode;state.activePermissionMode=after.mode;updateHeader();toast(`Permissions: ${permissionNames[after.mode]} for the next turn.`);}
+    }
+  }
 };
 const prompt=$('#prompt');let promptIsComposing=false;
 prompt.addEventListener('compositionstart',()=>promptIsComposing=true);
@@ -594,7 +617,7 @@ async function init(){
   // ON. Change it permanently with START.bat permissions off, or per turn with
   // the composer picker.
   const defaultMode=data.defaultPermissionMode||(data.config.preferences?.bypassPermissions===false?'default':'bypassPermissions');
-  state.permissionMode=defaultMode;state.activePermissionMode=defaultMode;
+  state.defaultPermissionMode=defaultMode;state.permissionMode=defaultMode;state.activePermissionMode=defaultMode;
   $('#health-connection').textContent='Connected';updateHeader();resetSession();renderProviders();await refreshSessions();$('#send').disabled=true;
 }
 init().catch(e=>{$('#connection').innerHTML='<span class="status-dot failed"></span>Disconnected';$('#health-connection').textContent='Disconnected';setRunStatus('failed',e.message);toast(e.message);});

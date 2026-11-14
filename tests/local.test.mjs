@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, request as httpRequest } from 'node:http';
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 
@@ -97,6 +98,25 @@ test('a provider environment points GIT_CONFIG_GLOBAL at the host, not the porta
 });
 
 // ── Zero footprint ─────────────────────────────────────────────────
+
+test('a session finds the portable Node on PATH even when resumed', () => {
+  // RESUME.bat and resume.sh exec the portable Node without exporting its
+  // directory, unlike bootstrap.ps1 and start.sh. Shell commands inside that
+  // session could not find `node` on a host without a system installation.
+  const nodeDirectory = dirname(process.execPath);
+  const separator = process.platform === 'win32' ? ';' : ':';
+  const profile = { provider: 'deepseek', auth: 'api', model: 'm', baseUrl: 'https://api.deepseek.com/anthropic', key: 'k' };
+
+  const env = providerEnvironment(profile, { parent: { PATH: '/usr/bin', HOME: temp } });
+  const entries = String(env.PATH).split(separator);
+  assert.equal(entries[0], nodeDirectory, 'the running interpreter comes first');
+  assert.ok(entries.includes('/usr/bin'), 'the original PATH is kept');
+  assert.equal(entries.filter(entry => entry === nodeDirectory).length, 1);
+
+  // Already present: no duplicate entry on every start.
+  const again = providerEnvironment(profile, { parent: { PATH: [nodeDirectory, '/usr/bin'].join(separator), HOME: temp } });
+  assert.equal(String(again.PATH).split(separator).filter(entry => entry === nodeDirectory).length, 1);
+});
 
 test('portable environment redirects host folders into data/', () => {
   const env = portableEnvironment();
@@ -340,16 +360,22 @@ test('a foreign service on the proxy port is not adopted', async () => {
   const foreign = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end('<h1>not a proxy</h1>'); });
   const other = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, upstream: 'http://127.0.0.1:11434' })); });
   const wrongUpstream = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, upstream: 'http://10.0.0.9:11434' })); });
-  await Promise.all([foreign, other, wrongUpstream].map(s => new Promise(r => s.listen(0, '127.0.0.1', r))));
+  // Looks healthy but names no upstream at all: the previous guard only
+  // compared when the field was present, so this listener was adopted.
+  const silentUpstream = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true })); });
+  const servers = [foreign, other, wrongUpstream, silentUpstream];
+  await Promise.all(servers.map(s => new Promise(r => s.listen(0, '127.0.0.1', r))));
   const url = s => `http://127.0.0.1:${s.address().port}`;
   try {
     assert.equal(await proxyStatus({ url: url(foreign) }), false, 'an unrelated 200 is not the proxy');
     assert.equal(await proxyStatus({ url: url(other) }), true, 'the proxy shape is accepted');
     assert.equal(await proxyStatus({ url: url(other), upstream: 'http://127.0.0.1:11434' }), true);
     assert.equal(await proxyStatus({ url: url(wrongUpstream), upstream: 'http://127.0.0.1:11434' }), false, 'a different upstream is a different server');
+    assert.equal(await proxyStatus({ url: url(silentUpstream), upstream: 'http://127.0.0.1:11434' }), false, 'a health answer without the expected upstream is not ours');
+    assert.equal(await proxyStatus({ url: url(silentUpstream) }), true, 'without an expectation the shape is enough');
     assert.equal(await proxyStatus({ url: 'http://127.0.0.1:1' }), false, 'nothing listening');
   } finally {
-    await Promise.all([foreign, other, wrongUpstream].map(s => new Promise(r => s.close(r))));
+    await Promise.all(servers.map(s => new Promise(r => s.close(r))));
   }
 });
 
@@ -386,6 +412,78 @@ test('a shared server or proxy is only stopped by the last session using it', ()
   const state = JSON.parse(readFileSync(file, 'utf8'));
   assert.deepEqual(state.owners, {});
   assert.deepEqual(state.consumers, []);
+});
+
+test('concurrent processes registering the same role never lose an entry', async () => {
+  // Two launches registering at once used to read the same old file and the
+  // later write dropped the other pid. The survivor then counted itself as the
+  // last consumer and stopped the shared server. Real child processes, released
+  // together, must all survive.
+  const file = join(temp, 'consumers-race.json');
+  const script = join(temp, 'register-consumer.mjs');
+  const library = new URL('../lib/local-models.mjs', import.meta.url).href;
+  // A real launch stays alive after registering, so the children hold here:
+  // an exited pid is pruned on purpose and would hide the race.
+  writeFileSync(script, [
+    `const [file, role, startAt] = process.argv.slice(2);`,
+    `const { registerLocalConsumer } = await import(${JSON.stringify(library)});`,
+    `while (Date.now() < Number(startAt)) {}`,
+    `registerLocalConsumer(role, { file });`,
+    `process.stdout.write(String(process.pid) + '\\n');`,
+    // Hold without a timing assumption: the parent ends it by closing stdin.
+    `process.stdin.resume();`,
+  ].join('\n'));
+
+  const startAt = Date.now() + 1200;
+  const children = Array.from({ length: 8 }, () => spawn(process.execPath, [script, file, 'server', String(startAt)], { stdio: ['pipe', 'pipe', 'inherit'] }));
+  try {
+    const pids = await Promise.all(children.map(child => new Promise((resolve, reject) => {
+      child.stdout.once('data', data => resolve(Number(String(data).trim())));
+      child.once('exit', code => reject(new Error(`child exited early with ${code}`)));
+    })));
+    assert.equal(pids.length, 8);
+
+    const state = JSON.parse(readFileSync(file, 'utf8'));
+    assert.equal(state.consumers.length, 8, 'no registration was overwritten');
+    assert.deepEqual(state.consumers.map(entry => entry.pid).sort(), [...pids].sort(), 'the registered pids are the live children');
+  } finally {
+    for (const child of children) child.kill();
+  }
+});
+
+test('a lock whose owner is still alive is waited for, never stolen', async t => {
+  // Breaking by age alone would delete the lock of a slow but healthy process.
+  const file = join(temp, 'consumers-live-lock.json');
+  const lock = `${file}.lock`;
+  mkdirSync(dirname(file), { recursive: true });
+  const holder = spawn(process.execPath, ['-e', 'setTimeout(()=>{},30000)']);
+  t.after(() => holder.kill());
+  await new Promise(resolve => holder.once('spawn', resolve));
+
+  writeFileSync(lock, JSON.stringify({ pid: holder.pid, since: Date.now() }));
+  const past = new Date(Date.now() - 60_000);
+  utimesSync(lock, past, past);
+
+  // A different role, so the stale-lock path is exercised rather than skipped.
+  const started = Date.now();
+  registerLocalConsumer('server', { pid: 44001, file, alive: () => true });
+  assert.ok(Date.now() - started >= 600, 'the live lock is not broken immediately');
+  // It eventually acquires after its own timeout; the important part is that it
+  // did not delete the lock while its owner was alive.
+  const stillThere = existsSync(lock) === false || JSON.parse(readFileSync(lock, 'utf8')).pid === holder.pid;
+  assert.ok(stillThere, 'the live lock was not replaced by force');
+});
+
+test('a lock left behind by a killed process is broken', () => {
+  const file = join(temp, 'consumers-stale-lock.json');
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(`${file}.lock`, 'dead');
+  const past = new Date(Date.now() - 60_000);
+  utimesSync(`${file}.lock`, past, past);
+  const started = Date.now();
+  registerLocalConsumer('proxy', { pid: 43001, file, alive: () => true });
+  assert.ok(Date.now() - started < 2000, 'the stale lock is not waited out');
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).consumers.length, 1);
 });
 
 test('a consumer that died without cleanup is pruned', () => {

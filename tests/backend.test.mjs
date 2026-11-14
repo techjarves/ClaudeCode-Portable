@@ -107,6 +107,9 @@ test('dashboard blocks unauthenticated, cross-origin and rebinding requests',asy
   const switched=await fetch(`${app.origin}/api/config/active`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({provider:'openrouter'})});assert.equal(switched.status,200);assert.equal((await switched.json()).active,'openrouter');activateProfile('custom');
   const page=await fetch(app.origin);assert.match(page.headers.get('content-security-policy'),/frame-ancestors 'none'/);
   const composerScript=await fetch(`${app.origin}/composer.js`);assert.equal(composerScript.status,200);assert.match(await composerScript.text(),/isComposerSubmitKey/);
+  // The studio imports this module at load time; a missing static route breaks
+  // the whole page, not just the permission picker.
+  const permissionScript=await fetch(`${app.origin}/permission-turn.js`);assert.equal(permissionScript.status,200);assert.match(await permissionScript.text(),/permissionModeAfterRun/);
   assert.equal((await fetch(`${app.origin}/data/settings.json`)).status,404);
   // A file:// URL is documented as clickable. Without conversion it fails the
   // absolute-path check, so reaching "does not exist" proves it was decoded.
@@ -118,11 +121,17 @@ test('dashboard blocks unauthenticated, cross-origin and rebinding requests',asy
   // itself is not a local file and is rejected as invalid.
   const unc=await open('file://portable-nowhere/share/x.txt');
   assert.equal(unc.error,process.platform==='win32'?'That path does not exist':'Invalid file URL');
-  // An empty file URL names no path. POSIX decodes all three to `/`, so without
-  // this guard the endpoint would open the filesystem root quite happily.
+  // An empty file URL names no path. POSIX decodes all of these to `/`, so
+  // without this guard the endpoint would open the filesystem root quite
+  // happily. The check cannot rely on an empty hostname: the URL parser
+  // normalises `file://localhost` to an empty host, so a host-keyed guard would
+  // have let it through.
   assert.equal((await open('file:')).error,'Invalid file URL');
   assert.equal((await open('file://')).error,'Invalid file URL');
   assert.equal((await open('file:///')).error,'Invalid file URL');
+  assert.equal((await open('file://localhost')).error,'Invalid file URL');
+  assert.equal((await open('file://localhost/')).error,'Invalid file URL');
+  assert.equal((await open('file://127.0.0.1/')).error,'Invalid file URL');
   assert.equal((await open('relative.txt')).error,'Only absolute local paths can be opened');
   assert.equal((await open('')).error,'Invalid path');
   assert.equal((await fetch(`${app.origin}/api/config`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'text/plain'},body:'{}'})).status,415);

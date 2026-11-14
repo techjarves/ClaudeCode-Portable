@@ -211,7 +211,7 @@ The launcher prints the effective mode on every terminal launch (`Bypass permiss
 
 ### Studio dashboard
 
-The studio starts a turn with the same stored mode. Switching a single turn to **Unrestricted** in the composer still requires typing `UNRESTRICTED` for that turn.
+The studio starts a turn with the same stored mode. Switching a single turn to **Unrestricted** in the composer still requires typing `UNRESTRICTED` for that turn. A choice made in the composer covers exactly one turn: after that turn the picker returns to the stored mode, so an Unrestricted turn never silently applies to later runs.
 
 ---
 

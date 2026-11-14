@@ -24,7 +24,7 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
   mkdirSync(LOGS,{recursive:true});
   let origin; let maintenance=false; let restartRequired=false; const pulls=new Set();
   const staticFiles={
-    '/':'dashboard/index.html','/app.js':'dashboard/app.js','/composer.js':'dashboard/composer.js','/links.js':'dashboard/links.js','/requests.js':'dashboard/requests.js','/styles.css':'dashboard/styles.css','/icons.js':'dashboard/icons.js',
+    '/':'dashboard/index.html','/app.js':'dashboard/app.js','/composer.js':'dashboard/composer.js','/links.js':'dashboard/links.js','/permission-turn.js':'dashboard/permission-turn.js','/requests.js':'dashboard/requests.js','/styles.css':'dashboard/styles.css','/icons.js':'dashboard/icons.js',
     '/vendor/marked.js':join(RUNTIME,'node_modules/marked/lib/marked.esm.js'),
     '/vendor/purify.js':join(RUNTIME,'node_modules/dompurify/dist/purify.es.mjs'),
     '/vendor/highlight.js':join(RUNTIME,'node_modules/@highlightjs/cdn-assets/es/highlight.min.js')
@@ -134,10 +134,12 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
         if(/^file:/i.test(requested)){
           let parsed;
           try{parsed=new URL(requested);}catch{throw new Error('Invalid file URL');}
-          // `file:`, `file://` and `file:///` name no path at all. On POSIX
-          // fileURLToPath() turns them into `/`, which would open the root in
-          // the file manager instead of failing; reject them before converting.
-          if(parsed.pathname.replace(/^\/+/,'')===''&&!parsed.hostname)throw new Error('Invalid file URL');
+          // `file:`, `file:///` and `file://127.0.0.1/` name no path. On POSIX
+          // fileURLToPath() turns an empty path into `/`, which would open the
+          // filesystem root in the file manager instead of failing. The check
+          // ignores the host on purpose: the URL parser normalises a `localhost`
+          // host to an empty one, so keying on it would leave a hole.
+          if(parsed.pathname.replace(/^\/+/,'')==='')throw new Error('Invalid file URL');
           try{target=fileURLToPath(requested);}catch{throw new Error('Invalid file URL');}
         }
         if(!isAbsolute(target))throw new Error('Only absolute local paths can be opened');
