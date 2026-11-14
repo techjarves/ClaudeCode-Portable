@@ -57,9 +57,7 @@ export function linkifyText(text, { allowed = isFilePath } = {}) {
     if (!path || !allowed(path)) continue;
     parts.push(escapeHtml(source.slice(cursor, match.index)));
     parts.push(escapeHtml(leading));
-    // A button, not a link: opening a local file is an action with no URL, and a
-    // button stays reachable with Tab and the keyboard.
-    parts.push(`<button type="button" class="path-link" data-open-path="${escapeHtml(path)}" title="Open ${escapeHtml(path)}">${escapeHtml(path)}</button>`);
+    parts.push(pathButtonHtml(path));
     parts.push(escapeHtml(trailing));
     cursor = match.index + match.text.length;
     inserted++;
@@ -69,16 +67,26 @@ export function linkifyText(text, { allowed = isFilePath } = {}) {
   return parts.join('');
 }
 
+// A button, not a link: opening a local file is an action with no URL, and a
+// button stays reachable with Tab and the keyboard.
+function pathButtonHtml(path) {
+  return `<button type="button" class="path-link" data-open-path="${escapeHtml(path)}" title="Open ${escapeHtml(path)}">${escapeHtml(path)}</button>`;
+}
+
 export function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
 /**
  * Acts on already-rendered HTML: every web link gets target and rel so it never
- * navigates the studio away, and every text node outside code and links is
- * scanned for paths. Returns how many nodes were rewritten.
+ * navigates the studio away, and every text node outside code blocks and links
+ * is scanned for paths. Returns how many nodes were rewritten.
+ *
+ * Inline code is linkified as a whole: backticks mark the exact value, so a
+ * space inside them belongs to the path (`D:\Apps\Claude Code\x.jpg`) rather
+ * than to the sentence. Code blocks stay plain so copying them still works.
  */
-export function linkifyElement(root, documentRef = globalThis.document, { skip = 'CODE, PRE, A, BUTTON, TEXTAREA, SCRIPT, STYLE' } = {}) {
+export function linkifyElement(root, documentRef = globalThis.document, { skip = 'PRE, A, BUTTON, TEXTAREA, SCRIPT, STYLE' } = {}) {
   if (!root) return 0;
   for (const link of root.querySelectorAll('a[href]')) {
     if (!/^https?:/i.test(link.getAttribute('href'))) continue;
@@ -92,16 +100,40 @@ export function linkifyElement(root, documentRef = globalThis.document, { skip =
     const parent = node.parentElement;
     // Code blocks keep their text selectable and copyable, and links stay links.
     if (!parent || parent.closest(skip)) continue;
-    targets.push(node);
+    targets.push({ node, inlineCode: parent.tagName === 'CODE' });
   }
   let changed = 0;
-  for (const node of targets) {
-    const html = linkifyText(node.nodeValue);
-    if (html === node.nodeValue) continue;
+  for (const { node, inlineCode } of targets) {
+    const replacement = inlineCode ? inlineCodeHtml(node.nodeValue) : linkifyText(node.nodeValue);
+    if (replacement === node.nodeValue) continue;
     const template = documentRef.createElement('template');
-    template.innerHTML = html;
+    template.innerHTML = replacement;
     node.parentNode.replaceChild(template.content, node);
     changed++;
   }
   return changed;
+}
+
+// A whole inline-code span that is one path becomes one button.
+function inlineCodeHtml(text) {
+  const value = String(text ?? '');
+  const path = inlineCodePath(value);
+  // Inside backticks the value is either one path or nothing; a partial
+  // replacement would cut a path with spaces in half.
+  return path ? pathButtonHtml(path) : value;
+}
+
+/**
+ * The path an inline-code span holds, or null. Accepts the whole span only when
+ * it holds exactly one path: two drive letters mean two paths, and a path with
+ * spaces would otherwise be split at the wrong place.
+ */
+export function inlineCodePath(text) {
+  const value = String(text ?? '').trim();
+  if (!value || /\n/.test(value)) return null;
+  // A file URL carries a drive letter of its own, so it is counted separately.
+  const markers = /^file:\/\//i.test(value) ? [(value.match(/^file:\/\//i) || [''])[0]] : value.match(/[A-Za-z]:[\\/]/g);
+  if (!markers || markers.length !== 1) return null;
+  const { path } = trimPath(value);
+  return path && isFilePath(path) ? path : null;
 }

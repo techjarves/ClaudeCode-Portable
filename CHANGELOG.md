@@ -25,9 +25,12 @@ an HTTP page, so a picture or a report had to be found by hand.
   goes through a shell, so `&`, quotes and other metacharacters stay literal.
 - A path with spaces is only recognised inside quotes, because in running text a space is far more
   often the sentence than part of the name. Trailing punctuation stays outside the link.
-- Code blocks keep plain text so copying still works; paths there are not turned into buttons.
+- **Inline code is linkified as a whole.** Backticks mark the exact value, so a path with a space in
+  it (`D:\Apps\Claude Code\x.jpg`) stays in one piece instead of being cut at the space. A span is
+  only accepted when it holds exactly one path; anything else stays plain text.
+- Fenced code blocks still keep plain text so copying works; the earlier rule skipped inline code
+  as well, which left the most common way of writing a path unclickable.
 - Web links open in a new tab and never navigate the studio away.
-
 #### Clickable paths in the terminal
 
 Claude Code emits OSC 8 hyperlinks for paths and URLs, but only in terminals it recognises. Windows

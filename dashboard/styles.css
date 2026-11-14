@@ -64,7 +64,7 @@ dialog{border:1px solid var(--line);border-radius:14px;background:var(--surface)
 .composer.drop-target::after{content:"Drop files or images to attach";position:absolute;inset:0;display:grid;place-items:center;border-radius:inherit;background:color-mix(in srgb,var(--surface) 74%,transparent);color:var(--accent);font-size:12px;font-weight:600;letter-spacing:.2px;pointer-events:none}
 
 /* Local paths and web links inside rendered messages. */
-.path-link{color:var(--accent);text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;cursor:pointer;border-radius:3px}
+.path-link{color:var(--accent);text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;cursor:pointer;border-radius:3px;border:0;background:transparent;font:inherit;line-height:inherit;padding:0;margin:0;text-align:left;white-space:inherit}
 .path-link:hover{background:var(--accent-bg);text-decoration-style:solid}
 .path-link:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .chat-tool pre .path-link,.tool-output .path-link{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere;padding:0;text-align:left}

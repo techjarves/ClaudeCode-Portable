@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isFilePath, linkifyText, trimPath } from '../dashboard/links.js';
+import { inlineCodePath, isFilePath, linkifyText, trimPath } from '../dashboard/links.js';
 import { openLocalPath, openerFor } from '../lib/open-path.mjs';
 
 test('only absolute local paths count as files', () => {
@@ -55,6 +55,20 @@ test('an unquoted path stops at whitespace', () => {
   const html = linkifyText('Saved to D:\\Apps\\bild.png for you.');
   assert.match(html, /data-open-path="D:\\Apps\\bild\.png"/);
   assert.match(html, / for you\.$/);
+});
+
+test('inline code holds its whole value, spaces included', () => {
+  // This is the case from the studio: a path in backticks with a space in it.
+  assert.equal(inlineCodePath('D:\\Apps\\Claude Code\\data\\die-odyssee-poster.jpg'), 'D:\\Apps\\Claude Code\\data\\die-odyssee-poster.jpg');
+  assert.equal(inlineCodePath('C:\\Users\\Karlheinz\\AppData\\Local\\Temp\\claude\\x\\images\\1.jpg'), 'C:\\Users\\Karlheinz\\AppData\\Local\\Temp\\claude\\x\\images\\1.jpg');
+  assert.equal(inlineCodePath('file:///D:/a/b.png'), 'file:///D:/a/b.png');
+});
+
+test('inline code with two paths or no path stays plain', () => {
+  assert.equal(inlineCodePath('D:\\a\\b.txt und C:\\c\\d.txt'), null);
+  assert.equal(inlineCodePath('npm run build'), null);
+  assert.equal(inlineCodePath('D:\\a\\b.txt\nC:\\c\\d.txt'), null);
+  assert.equal(inlineCodePath(''), null);
 });
 
 test('the opener never builds a shell command line', async () => {
