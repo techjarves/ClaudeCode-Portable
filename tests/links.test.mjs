@@ -39,6 +39,24 @@ test('several paths and a file URL in one line', () => {
   assert.equal((html.match(/class="path-link"/g) || []).length, 3);
 });
 
+test('a forward-slash drive path becomes a button', () => {
+  // The README documents this form, so it has to work, not just pass isFilePath.
+  const html = linkifyText('See C:/Users/x/file.txt for details.');
+  assert.match(html, /data-open-path="C:\/Users\/x\/file\.txt"/);
+  assert.match(html, /<\/button>/);
+});
+
+test('a URL is not mistaken for a drive path', () => {
+  const html = linkifyText('See https://example.com/a/b.txt now.');
+  assert.doesNotMatch(html, /path-link/);
+});
+
+test('a file URL is not also matched by the drive pattern', () => {
+  const html = linkifyText('Open file:///D:/a/b.png now.');
+  assert.equal((html.match(/class="path-link"/g) || []).length, 1);
+  assert.match(html, /data-open-path="file:\/\/\/D:\/a\/b\.png"/);
+});
+
 test('a path containing an ampersand is escaped', () => {
   const html = linkifyText('D:\\A&B\\x.txt');
   assert.match(html, /data-open-path="D:\\A&amp;B\\x\.txt"/);

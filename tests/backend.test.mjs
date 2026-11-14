@@ -108,6 +108,17 @@ test('dashboard blocks unauthenticated, cross-origin and rebinding requests',asy
   const page=await fetch(app.origin);assert.match(page.headers.get('content-security-policy'),/frame-ancestors 'none'/);
   const composerScript=await fetch(`${app.origin}/composer.js`);assert.equal(composerScript.status,200);assert.match(await composerScript.text(),/isComposerSubmitKey/);
   assert.equal((await fetch(`${app.origin}/data/settings.json`)).status,404);
+  // A file:// URL is documented as clickable. Without conversion it fails the
+  // absolute-path check, so reaching "does not exist" proves it was decoded.
+  // The path is fictional on purpose: a real one would open a window.
+  const open=async path=>{const r=await fetch(`${app.origin}/api/open`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({path})});return {status:r.status,error:(await r.json()).error};};
+  const fileUrl=await open('file:///D:/portable-does-not-exist/never.txt');
+  assert.equal(fileUrl.status,400);assert.equal(fileUrl.error,'That path does not exist');
+  // A file URL with a host is a UNC path, not a rejection.
+  assert.equal((await open('file://portable-nowhere/share/x.txt')).error,'That path does not exist');
+  assert.equal((await open('file:')).error,'Invalid file URL');
+  assert.equal((await open('relative.txt')).error,'Only absolute local paths can be opened');
+  assert.equal((await open('')).error,'Invalid path');
   assert.equal((await fetch(`${app.origin}/api/config`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'text/plain'},body:'{}'})).status,415);
   const picked=await fetch(`${app.origin}/api/workspace/pick`,{method:'POST',headers:{'X-Portable-Token':app.token,'Content-Type':'application/json'},body:JSON.stringify({initial:'/ignored'})});
   assert.deepEqual(await picked.json(),{workspace:temp,cancelled:false});

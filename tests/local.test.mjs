@@ -11,6 +11,7 @@ const { resolveGitBash, gitEnvironment, bundledGitBash, hostGitConfigPath } = aw
 const { portableEnvironment, providerEnvironment } = await import('../lib/providers.mjs');
 const { trimSystemPrompt, trimAnthropicBody, trimOpenAIBody, createProxyServer } = await import('../tools/local-proxy.mjs');
 const { prepareLocalSession } = await import('../lib/local-session.mjs');
+const { proxyStatus, ollamaUpstream } = await import('../lib/local-models.mjs');
 const { PLAYWRIGHT_BROWSERS_DIR } = await import('../lib/playwright.mjs');
 
 test.after(() => rmSync(temp, { recursive: true, force: true }));
@@ -217,6 +218,47 @@ test('only Ollama gets the local stack; cleanup stops what we started', async ()
   assert.equal(local.profile.baseUrl, 'http://127.0.0.1:11435');
   await local.cleanup();
   assert.deepEqual(calls, ['server', 'proxy', 'stopProxy', 'stopServer']);
+});
+
+test('the proxy forwards to the server the profile names', async () => {
+  // A LAN Ollama must not be silently replaced by localhost.
+  const seen = [];
+  const lan = await prepareLocalSession(
+    { provider: 'ollama', baseUrl: 'http://192.168.1.50:11434' },
+    {
+      hasServer: () => false,
+      startSpeedProxy: async options => { seen.push(options); return { started: true, url: 'http://127.0.0.1:11435' }; },
+    },
+  );
+  assert.deepEqual(seen[0].upstream, { host: '192.168.1.50', port: 11434, url: 'http://192.168.1.50:11434' });
+  await lan.cleanup();
+});
+
+test('ollamaUpstream ignores a path and defaults the port', () => {
+  assert.deepEqual(ollamaUpstream('http://192.168.1.50:11434/v1'), { host: '192.168.1.50', port: 11434, url: 'http://192.168.1.50:11434' });
+  assert.deepEqual(ollamaUpstream('http://box'), { host: 'box', port: 11434, url: 'http://box:11434' });
+  assert.deepEqual(ollamaUpstream('https://box'), { host: 'box', port: 443, url: 'http://box:443' });
+  assert.equal(ollamaUpstream('not a url'), null);
+  assert.equal(ollamaUpstream(''), null);
+});
+
+test('a foreign service on the proxy port is not adopted', async () => {
+  // A 200 from somebody else's listener used to count as "our proxy is up",
+  // which routed every prompt to that service.
+  const foreign = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end('<h1>not a proxy</h1>'); });
+  const other = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, upstream: 'http://127.0.0.1:11434' })); });
+  const wrongUpstream = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, upstream: 'http://10.0.0.9:11434' })); });
+  await Promise.all([foreign, other, wrongUpstream].map(s => new Promise(r => s.listen(0, '127.0.0.1', r))));
+  const url = s => `http://127.0.0.1:${s.address().port}`;
+  try {
+    assert.equal(await proxyStatus({ url: url(foreign) }), false, 'an unrelated 200 is not the proxy');
+    assert.equal(await proxyStatus({ url: url(other) }), true, 'the proxy shape is accepted');
+    assert.equal(await proxyStatus({ url: url(other), upstream: 'http://127.0.0.1:11434' }), true);
+    assert.equal(await proxyStatus({ url: url(wrongUpstream), upstream: 'http://127.0.0.1:11434' }), false, 'a different upstream is a different server');
+    assert.equal(await proxyStatus({ url: 'http://127.0.0.1:1' }), false, 'nothing listening');
+  } finally {
+    await Promise.all([foreign, other, wrongUpstream].map(s => new Promise(r => s.close(r))));
+  }
 });
 
 test('an external server or a failed proxy never blocks the session', async () => {

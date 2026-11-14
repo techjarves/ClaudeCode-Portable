@@ -6,8 +6,13 @@
 
 // A quoted path may contain spaces; an unquoted one may not, because spaces in
 // running text are far more often the sentence than part of the folder name.
-const QUOTED_PATH = /"[A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]+"/g;
+const QUOTED_PATH = /"[A-Za-z]:[\\/](?:[^\\/:*?"<>|\r\n]+[\\/])*[^\\/:*?"<>|\r\n]+"/g;
 const WINDOWS_PATH = /[A-Za-z]:\\(?:[^\\\s/:*?"<>|\r\n]+\\)*[^\\\s/:*?"<>|\r\n]+/g;
+// Windows accepts forward slashes too, and `C:/Users/x/file.txt` is a common way
+// to write a path in text that came from a URL bar or a config file. The
+// lookbehind keeps it from matching the tail of `https://`: there the colon is
+// preceded by a letter, so that `s:/` is not a drive.
+const WINDOWS_FORWARD_PATH = /(?<![A-Za-z0-9])[A-Za-z]:\/(?:[^\s/\\:*?"<>|]+\/)*[^\s/\\:*?"<>|]+/g;
 const UNC_PATH = /\\\\[^\\\s/:*?"<>|\r\n]+\\[^\\\s/:*?"<>|\r\n]+(?:\\[^\\\s/:*?"<>|\r\n]+)*/g;
 const FILE_URL = /file:\/\/\/[^\s<>"']+/gi;
 // Trailing punctuation is usually the sentence, not the path.
@@ -41,8 +46,9 @@ export function linkifyText(text, { allowed = isFilePath } = {}) {
   const source = String(text ?? '');
   if (!source) return source;
   const matches = [];
-  // The quoted pattern runs first so a path with spaces is not cut short.
-  for (const pattern of [QUOTED_PATH, FILE_URL, WINDOWS_PATH, UNC_PATH]) {
+  // The quoted pattern runs first so a path with spaces is not cut short, and
+  // the file URL before the drive patterns so its inner `D:/` is not taken twice.
+  for (const pattern of [QUOTED_PATH, FILE_URL, WINDOWS_PATH, WINDOWS_FORWARD_PATH, UNC_PATH]) {
     for (const match of source.matchAll(pattern)) matches.push({ index: match.index, text: match[0] });
   }
   if (!matches.length) return source;
