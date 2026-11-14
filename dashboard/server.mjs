@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync, appendFileSync, mkdirSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { join, extname, isAbsolute } from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { ROOT, DATA, RUNTIME, LOGS, CHAT_WORKSPACE } from '../lib/paths.mjs';
@@ -12,6 +12,7 @@ import { removeNativeSession } from '../lib/native-sessions.mjs';
 import { AgentManager } from '../lib/agent.mjs';
 import { externalAdapterAvailable } from '../lib/external-adapter.mjs';
 import { readBody, json } from '../lib/http.mjs';
+import { openLocalPath } from '../lib/open-path.mjs';
 import { localStatus, startLocal, stopLocal, pullModel } from '../lib/local-models.mjs';
 import { sessionTranscript } from '../lib/transcript.mjs';
 import { pickWorkspace } from '../lib/workspace-picker.mjs';
@@ -23,7 +24,7 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
   mkdirSync(LOGS,{recursive:true});
   let origin; let maintenance=false; let restartRequired=false; const pulls=new Set();
   const staticFiles={
-    '/':'dashboard/index.html','/app.js':'dashboard/app.js','/composer.js':'dashboard/composer.js','/requests.js':'dashboard/requests.js','/styles.css':'dashboard/styles.css','/icons.js':'dashboard/icons.js',
+    '/':'dashboard/index.html','/app.js':'dashboard/app.js','/composer.js':'dashboard/composer.js','/links.js':'dashboard/links.js','/requests.js':'dashboard/requests.js','/styles.css':'dashboard/styles.css','/icons.js':'dashboard/icons.js',
     '/vendor/marked.js':join(RUNTIME,'node_modules/marked/lib/marked.esm.js'),
     '/vendor/purify.js':join(RUNTIME,'node_modules/dompurify/dist/purify.es.mjs'),
     '/vendor/highlight.js':join(RUNTIME,'node_modules/@highlightjs/cdn-assets/es/highlight.min.js')
@@ -120,6 +121,16 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
       if(url.pathname==='/api/log'&&req.method==='GET'){
         const name=url.searchParams.get('name');if(!listLogs().includes(name))return json(res,404,{error:'Log not found'});
         return json(res,200,{text:redact(readFileSync(join(LOGS,name),'utf8').slice(-50000))});
+      }
+      // Opens a local file or folder in the host's file manager. Paths only:
+      // web links belong to the browser and never travel through here.
+      if(url.pathname==='/api/open'&&req.method==='POST'){
+        const target=String(body.path||'').trim();
+        if(!target||target.length>4096)throw new Error('Invalid path');
+        if(!isAbsolute(target))throw new Error('Only absolute local paths can be opened');
+        if(!existsSync(target))throw new Error('That path does not exist');
+        await openLocalPath(target);
+        return json(res,200,{ok:true});
       }
       if(url.pathname==='/api/runtime'&&req.method==='POST'){
         if(manager.runs.size||maintenance)throw new Error('Stop active turns before runtime maintenance');

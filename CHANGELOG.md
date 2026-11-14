@@ -13,6 +13,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### Clickable local paths in the studio
+
+A path in a reply or in a tool's output was plain text, and a browser will not start a local file from
+an HTTP page, so a picture or a report had to be found by hand.
+
+- Paths in replies and tool output are now clickable and open with the user's own application:
+  `D:\folder\file.png`, `C:/folder/file.png`, `\\server\share\file.pdf`, and `file:///D:/...`.
+- The click goes to the token-protected `POST /api/open`, which accepts only absolute paths that
+  exist and hands them to `explorer.exe` / `open` / `xdg-open`. The path is one argument and never
+  goes through a shell, so `&`, quotes and other metacharacters stay literal.
+- A path with spaces is only recognised inside quotes, because in running text a space is far more
+  often the sentence than part of the name. Trailing punctuation stays outside the link.
+- Code blocks keep plain text so copying still works; paths there are not turned into buttons.
+- Web links open in a new tab and never navigate the studio away.
+
+#### Clickable paths in the terminal
+
+Claude Code emits OSC 8 hyperlinks for paths and URLs, but only in terminals it recognises. Windows
+sets no identifier in the classic console, so nothing was clickable there.
+
+- Documented that **Windows Terminal** works automatically (Ctrl+Click) because it exports
+  `WT_SESSION`, while the classic console does not.
+- `PORTABLE_AI_HYPERLINKS=1` exports `FORCE_HYPERLINK=1` for users who want the escape sequences
+  forced in other terminals. It stays opt-in: without OSC 8 support they would print as noise.
+
 #### Sessions learn that Playwright exists
 
 A session saw only its workspace and its own configuration, so nothing told the agent that the

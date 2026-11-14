@@ -171,6 +171,7 @@ The model always comes from the active provider profile. Two launcher-only switc
 | `GIT_CONFIG_GLOBAL` | Overrides which Git configuration the session reads; by default the host `~/.gitconfig` is detected automatically |
 | `PORTABLE_AI_NO_HOST_GIT_CONFIG` | Set to `1` to stop linking the host Git configuration into sessions |
 | `PORTABLE_AI_NO_PLAYWRIGHT` | Set to `1` to skip the Playwright installation entirely |
+| `PORTABLE_AI_HYPERLINKS` | Set to `1` to force OSC 8 hyperlinks in the terminal (exports `FORCE_HYPERLINK=1`) |
 | `PLAYWRIGHT_BROWSERS_PATH` | Browser location; the launcher sets it to `engine/playwright-browsers` for its own installs |
 
 ---
@@ -376,6 +377,33 @@ When the active profile is **Ollama**, every terminal launch (`START.bat cli`, `
 If no bundled Ollama is installed, an external server is used as-is. Proxy activity is written to `data/logs/proxy.log` only, never to the terminal.
 
 An OpenAI-compatible provider that is not Ollama (LM Studio, custom gateways) keeps using the endpoint configured in the dashboard.
+
+---
+
+## Clickable Paths and Links
+
+### Studio dashboard
+
+Local paths in a reply or a tool's output are clickable and open with your own application — Explorer for folders, the default program for files.
+
+- Recognised: `D:\folder\file.png`, `C:/folder/file.png`, `\\server\share\file.pdf`, and `file:///D:/...`.
+- A path with spaces is only recognised inside quotes (`"C:\Program Files\App\x.exe"`), because in running text a space is far more often the sentence than part of the name.
+- Paths in code blocks stay plain text, so copying them still works.
+- Web links open in a new tab; they never navigate the studio away.
+
+A browser cannot start a local file from an HTTP page, so the click goes to the token-protected `POST /api/open`, which checks that the path is absolute and exists and then hands it to `explorer.exe` (Windows), `open` (macOS) or `xdg-open` (Linux). The path is passed as a single argument, never through a shell, so characters like `&` or quotes cannot become a command.
+
+### Terminal
+
+Claude Code renders local paths and URLs as OSC 8 hyperlinks, which terminals show clickable. It only does so in terminals it recognises:
+
+| Terminal | Clickable paths |
+|---|---|
+| **Windows Terminal** | Yes, automatically — Ctrl+Click opens the path. |
+| Classic console (`conhost`) | No: it sets no identifier, so Claude Code sends no escape sequences. |
+| macOS Terminal, iTerm2, kitty, Warp, Ghostty, VS Code | Yes. |
+
+To start the classic console's sessions in **Windows Terminal** instead, open Windows Terminal and run `START.bat` (or `RESUME.bat`) there. To force the escape sequences anyway, set `PORTABLE_AI_HYPERLINKS=1` before launching — it exports `FORCE_HYPERLINK=1`. Terminals without OSC 8 support will print the sequences as visible noise, which is why this is not enabled by default.
 
 ---
 

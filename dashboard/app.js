@@ -4,6 +4,7 @@ import hljs from '/vendor/highlight.js';
 import { icon, hydrateIcons } from '/icons.js';
 import { ComposerRequests } from '/requests.js';
 import { isComposerSubmitKey } from '/composer.js';
+import { linkifyElement } from '/links.js';
 
 const $=s=>document.querySelector(s);
 const $$=s=>[...document.querySelectorAll(s)];
@@ -70,6 +71,15 @@ function closePermissions(focus=false){$('#permission-menu').hidden=true;$('#per
 function openPermissions(){ $('#permission-menu').hidden=false;$('#permission-picker').setAttribute('aria-expanded','true');$('#permission-menu [aria-pressed="true"]').focus(); }
 $('#permission-picker').onclick=()=>$('#permission-menu').hidden?openPermissions():closePermissions(true);
 document.addEventListener('click',e=>{if(!e.target.closest('.permission-control'))closePermissions();});
+// Opening happens on the server: a browser may not launch a local file from an
+// http page, so the path goes back over the token-protected API.
+document.addEventListener('click',e=>{
+  const link=e.target.closest('[data-open-path]');
+  if(!link)return;
+  e.preventDefault();
+  const path=link.dataset.openPath;
+  api('/api/open',{path}).catch(error=>toast(error.message));
+});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#permission-menu').hidden){e.preventDefault();closePermissions(true);}});
 $('#permission-menu').addEventListener('focusout',e=>{if(!e.currentTarget.parentElement.contains(e.relatedTarget))closePermissions();});
 $('#permission-menu').onkeydown=e=>{const buttons=$$('[data-permission]'),i=buttons.indexOf(document.activeElement);if(['ArrowDown','ArrowUp','Home','End'].includes(e.key)){e.preventDefault();buttons[e.key==='Home'?0:e.key==='End'?buttons.length-1:(i+(e.key==='ArrowDown'?1:buttons.length-1))%buttons.length].focus();}};
@@ -253,6 +263,8 @@ async function ensureSession(){
 }
 function renderMessageBody(body,text){
   body.innerHTML=DOMPurify.sanitize(marked.parse(text||''),{FORBID_TAGS:['style','iframe','form','input','button'],FORBID_ATTR:['style'],ALLOW_DATA_ATTR:false});
+  // Local paths in the reply become clickable; web links were already handled below.
+  linkifyElement(body);
   body.querySelectorAll('a').forEach(a=>{if(!/^https?:\/\//i.test(a.getAttribute('href')||''))a.removeAttribute('href');else{a.target='_blank';a.rel='noopener noreferrer';}});
   body.querySelectorAll('img').forEach(img=>{if(!/^data:image\/(png|jpeg|gif|webp);base64,/.test(img.getAttribute('src')||''))img.remove();});
   body.querySelectorAll('pre code').forEach(code=>{
@@ -428,8 +440,10 @@ function renderEvent(event,replay=false,sessionId=state.current?.id){
       record.status=event.status;
       for(const el of [record.inspector,record.chat]){const status=el.querySelector('.tool-state,.chat-tool-state');status.textContent=event.status;status.className=status.classList.contains('tool-state')?'tool-state':'chat-tool-state';status.classList.add(event.status);}
       if(event.type==='tool_result'){
-        const out=document.createElement('pre');out.className='tool-output';out.textContent=pretty(event.output);record.inspector.append(out);
-        const result=record.chat.querySelector('.chat-tool-result');result.hidden=false;result.querySelector('pre').textContent=pretty(event.output);
+        const out=document.createElement('pre');out.className='tool-output';out.textContent=pretty(event.output);linkifyElement(out,document,{skip:'A, BUTTON, SCRIPT, STYLE'});record.inspector.append(out);
+        const result=record.chat.querySelector('.chat-tool-result');result.hidden=false;
+        // Paths in tool output are the ones a reader most wants to open.
+        const outputPre=result.querySelector('pre');outputPre.textContent=pretty(event.output);linkifyElement(outputPre,document,{skip:'A, BUTTON, SCRIPT, STYLE'});
       }
     }
   }
