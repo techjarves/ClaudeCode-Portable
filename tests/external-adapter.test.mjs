@@ -33,6 +33,10 @@ test('tier env vars use aliases for external, single model for built-in', () => 
   assert.equal(external.ANTHROPIC_DEFAULT_SONNET_MODEL, 'main');
   assert.equal(external.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'small');
   assert.equal(external.ANTHROPIC_SMALL_FAST_MODEL, 'small');
+  // Adapters cannot forward extended thinking; hard-disable it even when the
+  // modelPicker behavesAs mapping makes Claude Code request adaptive thinking.
+  assert.equal(external.CLAUDE_CODE_DISABLE_THINKING, '1');
+  assert.equal(external.MAX_THINKING_TOKENS, '0');
   const builtin = providerEnvironment({ provider: 'custom', auth: 'api', baseUrl: 'http://127.0.0.1:8080/v1', model: 'main', key: 'k', modelAliases: { opus: 'big' } }, { adapter: { url: 'http://127.0.0.1:9', token: 't' }, parent: {} });
   assert.equal(builtin.ANTHROPIC_DEFAULT_OPUS_MODEL, 'main');
 });

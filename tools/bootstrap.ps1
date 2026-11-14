@@ -4,7 +4,7 @@ $ProgressPreference = 'SilentlyContinue'
 # streaming downloader below (PowerShell 7+ already has it; harmless there).
 Add-Type -AssemblyName System.Net.Http
 $ProjectRoot = Split-Path $PSScriptRoot -Parent
-$Version = '24.21.0'
+$Version = '26.13.1'
 $Arch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -eq 'Arm64') { 'arm64' } else { 'x64' }
 $NodeDir = Join-Path $ProjectRoot "engine/node-win32-$Arch"
 $NodeExe = Join-Path $NodeDir 'node.exe'
@@ -116,6 +116,55 @@ if ($NeedsNode) {
     if ($Installed -ne "v$Version") { throw "Portable Node.js verification failed (got '$Installed')" }
     Write-Host "Portable Node.js $Installed ready." -ForegroundColor Green
 }
+# Claude Code needs Git Bash for its shell tool. A system Git for Windows is
+# used as-is; PortableGit is downloaded only when none is installed.
+function Find-ExistingGitBash {
+    $candidates = @()
+    if ($env:CLAUDE_CODE_GIT_BASH_PATH) { $candidates += $env:CLAUDE_CODE_GIT_BASH_PATH }
+    $candidates += (Join-Path $ProjectRoot 'engine/git-win-x64/bin/bash.exe')
+    $candidates += 'C:\Program Files\Git\bin\bash.exe'
+    $candidates += 'C:\Program Files (x86)\Git\bin\bash.exe'
+    if ($env:LOCALAPPDATA) { $candidates += (Join-Path $env:LOCALAPPDATA 'Programs/Git/bin/bash.exe') }
+    foreach ($command in @(Get-Command git.exe -All -ErrorAction SilentlyContinue)) {
+        $dir = Split-Path $command.Source -Parent
+        $candidates += (Join-Path $dir 'bash.exe')
+        $candidates += (Join-Path $dir '../bin/bash.exe')
+        $candidates += (Join-Path $dir '../usr/bin/bash.exe')
+        $candidates += (Join-Path $dir '../../bin/bash.exe')
+        $candidates += (Join-Path $dir '../../usr/bin/bash.exe')
+    }
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) { return (Resolve-Path -LiteralPath $candidate).Path }
+    }
+    return $null
+}
+
+$GitBash = Find-ExistingGitBash
+if ($GitBash) {
+    Write-Host "Git Bash found: $GitBash" -ForegroundColor DarkGray
+} else {
+    $GitVersion = '2.56.1'
+    $GitDir = Join-Path $ProjectRoot 'engine/git-win-x64'
+    $GitArchive = Join-Path $ProjectRoot 'engine/PortableGit.7z.exe'
+    $GitAsset = if ($Arch -eq 'arm64') { "PortableGit-$GitVersion-arm64.7z.exe" } else { "PortableGit-$GitVersion-64-bit.7z.exe" }
+    $GitUrl = "https://github.com/git-for-windows/git/releases/download/v$GitVersion.windows.1/$GitAsset"
+    Write-Host 'No system Git for Windows found. Downloading bundled Git Bash (one-time, can take a few minutes)...'
+    try {
+        Invoke-PortableDownload $GitUrl $GitArchive 'Git for Windows'
+        if (Test-Path $GitDir) { Remove-Item $GitDir -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path $GitDir | Out-Null
+        & $GitArchive "-o$GitDir" '-y' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "PortableGit extraction failed (exit $LASTEXITCODE)" }
+        Remove-Item $GitArchive -Force -ErrorAction SilentlyContinue
+        $GitBash = Join-Path $GitDir 'bin/bash.exe'
+        if (-not (Test-Path $GitBash)) { throw 'PortableGit did not contain bin/bash.exe' }
+        Write-Host 'Bundled Git Bash ready.' -ForegroundColor Green
+    } catch {
+        Write-Host "  Git Bash setup skipped: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host '  The shell tool needs Git Bash; install Git for Windows if Claude Code reports it missing.' -ForegroundColor DarkGray
+    }
+}
+
 $env:PATH = "$NodeDir;$env:PATH"
 & $NodeExe (Join-Path $ProjectRoot 'tools/launcher.mjs') @args
 exit $LASTEXITCODE

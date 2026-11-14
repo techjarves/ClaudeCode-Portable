@@ -22,6 +22,24 @@ test('translates image blocks and error tool results without removing them',()=>
   const toolImage=translateRequest({...input,messages:[{role:'assistant',content:[{type:'tool_use',id:'read-1',name:'Read',input:{}}]},{role:'user',content:[{type:'tool_result',tool_use_id:'read-1',content:[image]}]}]},'m');
   assert.equal(toolImage.messages.at(-2).role,'tool');assert.equal(toolImage.messages.at(-1).content[1].image_url.url,'data:image/png;base64,AAAA');
 });
+test('tool search references are dropped instead of failing the request',()=>{
+  const tools=[{name:'ToolSearch',description:'Fetches schemas',input_schema:{type:'object'}},{name:'TaskStop',description:'Stops a task',input_schema:{type:'object'},defer_loading:true}];
+  // The shape Claude Code sends after a ToolSearch call: a tool_result that only
+  // contains tool_reference blocks.
+  const request={...input,tools,messages:[{role:'user',content:'stop it'},{role:'assistant',content:[{type:'tool_use',id:'search-1',name:'ToolSearch',input:{query:'select:TaskStop'}}]},{role:'user',content:[{type:'tool_result',tool_use_id:'search-1',content:[{type:'tool_reference',tool_name:'TaskStop'}]}]}]};
+  const req=translateRequest(request,'m');
+  const result=req.messages.find(message=>message.role==='tool');
+  assert.equal(result.tool_call_id,'search-1');
+  assert.equal(result.content,'Tool returned no textual output.');
+  // Every tool schema, including deferred ones, is forwarded anyway.
+  assert.deepEqual(req.tools.map(tool=>tool.function.name),['ToolSearch','TaskStop']);
+  // Mixed results keep their text and ignore the reference.
+  const mixed=translateRequest({...input,messages:[{role:'assistant',content:[{type:'tool_use',id:'a',name:'Read',input:{}}]},{role:'user',content:[{type:'tool_result',tool_use_id:'a',content:[{type:'tool_reference',tool_name:'TaskStop'},{type:'text',text:'payload'}]}]}]},'m');
+  assert.equal(mixed.messages.at(-1).content,'payload');
+  // A stray reference outside a tool result is ignored too.
+  assert.doesNotThrow(()=>translateRequest({...input,messages:[{role:'user',content:[{type:'tool_reference',tool_name:'TaskStop'}]}]},'m'));
+  assert.equal(translateRequest({...input,system:[{type:'tool_reference',tool_name:'TaskStop'},{type:'text',text:'Keep'}]},'m').messages[0].content,'Keep');
+});
 test('preserves Gemini thought signatures across tool-call history',async()=>{
   const metadata={google:{thought_signature:'opaque-signature'}},remembered=new Map();
   const body=translateResponse({choices:[{message:{tool_calls:[{id:'call-1',extra_content:metadata,function:{name:'Read',arguments:'{}'}}]},finish_reason:'tool_calls'}]},'gemini',{onToolCall:(id,value)=>remembered.set(id,value)});
