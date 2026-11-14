@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { request } from 'node:http';
 const temp=mkdtempSync(join(tmpdir(),'portable-ai-tests-'));process.env.PORTABLE_AI_DATA_DIR=join(temp,'data');
 const { saveProfile,activateProfile,readConfig,publicConfig,redact,parseLegacy,migrateLegacy,validateBaseURL }=await import('../lib/config.mjs');
-const { PROVIDERS,providerEnvironment,profileSettings,testConnection }=await import('../lib/providers.mjs');
+const { PROVIDERS,providerEnvironment,profileSettings,mergeProfileSettings,testConnection }=await import('../lib/providers.mjs');
 const { SessionStore }=await import('../lib/sessions.mjs');
 const { AgentManager }=await import('../lib/agent.mjs');
 const { startDashboard }=await import('../dashboard/server.mjs');
@@ -312,6 +312,22 @@ test('legacy transcript migration never fabricates ordering when event boundarie
   assert.deepEqual(migrated.map(e=>e.type),['message','message','history_note','tool','tool_result']);
   assert.match(migrated[2].text,/positions were not recorded/);
 });
+test('a managed model picker keeps the options the user already had',()=>{
+  const profile={provider:'custom',model:'my-model',contextWindow:1000000};
+  const wanted=profileSettings(profile);
+  const mine={model:'my-model',behavesAs:'claude-sonnet-5-5'};
+  // The user's own options survive; the managed entry is appended.
+  const existing={theme:'dark',modelPicker:{options:[{model:'other',behavesAs:'claude-haiku-5-5'}]}};
+  const merged=mergeProfileSettings(existing,wanted);
+  assert.deepEqual(merged.modelPicker.options,[{model:'other',behavesAs:'claude-haiku-5-5'},mine]);
+  assert.equal(merged.theme,'dark','unrelated keys survive too');
+  // Restarting must not grow the list: the entry is replaced in place.
+  const again=mergeProfileSettings(merged,wanted);
+  assert.equal(again.modelPicker.options.length,2);
+  // A picker without options is left as it was apart from our entry.
+  assert.deepEqual(mergeProfileSettings({modelPicker:{foo:1}},wanted).modelPicker,{foo:1,options:[mine]});
+});
+
 test('the studio turn follows the stored bypass-permissions default',async t=>{
   saveProfile({...profile,provider:'lmstudio',baseUrl:PROVIDERS.lmstudio.baseUrl});const p=readConfig().profiles.lmstudio;
   const store=new SessionStore(join(temp,'studio-permission-sessions'));

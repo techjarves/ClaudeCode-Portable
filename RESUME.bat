@@ -23,21 +23,21 @@ set "CONFIG_FILE=%DATA_DIR%\settings.json"
 if not exist "%NODE_EXE%" (
     echo [ERROR] Portable Node.js was not found: %NODE_EXE%
     echo [ERROR] Run START.bat once to install the portable runtime, then try again.
-    pause
+    if not defined PORTABLE_AI_NO_PAUSE pause
     exit /b 1
 )
 
 if not exist "%CLAUDE_EXE%" (
     echo [ERROR] Claude Code was not found: %CLAUDE_EXE%
     echo [ERROR] Run START.bat once to install the portable runtime, then try again.
-    pause
+    if not defined PORTABLE_AI_NO_PAUSE pause
     exit /b 1
 )
 
 if not exist "%CONFIG_FILE%" (
     echo [ERROR] No provider is configured: %CONFIG_FILE%
     echo [ERROR] Run START.bat once and choose a provider, then try again.
-    pause
+    if not defined PORTABLE_AI_NO_PAUSE pause
     exit /b 1
 )
 

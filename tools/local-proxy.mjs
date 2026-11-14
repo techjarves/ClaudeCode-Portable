@@ -16,6 +16,7 @@
  * terminal UI is not corrupted.
  */
 import { createServer, request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +25,8 @@ import { LOGS } from '../lib/paths.mjs';
 export const PROXY_PORT = Number(process.env.PORTABLE_PROXY_PORT || 11435);
 export const OLLAMA_HOST = process.env.PORTABLE_OLLAMA_HOST || '127.0.0.1';
 export const OLLAMA_PORT = Number(process.env.PORTABLE_OLLAMA_PORT || 11434);
+// A remote server may only speak TLS. Forwarding plaintext to it just fails.
+export const OLLAMA_SECURE = process.env.PORTABLE_OLLAMA_SECURE === '1';
 export const MAX_SYSTEM_CHARS = Number(process.env.PORTABLE_PROXY_MAX_CHARS || 1200); // ~300 tokens
 const TRUNCATION_NOTE = '\n\n[System prompt truncated for local model performance]';
 
@@ -76,11 +79,12 @@ function trimRequest(pathname, rawBody) {
   return { body: rawBody, saved: 0 };
 }
 
-export function createProxyServer({ upstreamHost = OLLAMA_HOST, upstreamPort = OLLAMA_PORT, maxChars = MAX_SYSTEM_CHARS } = {}) {
+export function createProxyServer({ upstreamHost = OLLAMA_HOST, upstreamPort = OLLAMA_PORT, upstreamSecure = OLLAMA_SECURE, maxChars = MAX_SYSTEM_CHARS } = {}) {
+  const upstreamUrl = `${upstreamSecure ? 'https' : 'http'}://${upstreamHost}:${upstreamPort}`;
   return createServer((req, res) => {
     if (req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, upstream: `http://${upstreamHost}:${upstreamPort}` }));
+      return res.end(JSON.stringify({ ok: true, upstream: upstreamUrl }));
     }
     const chunks = [];
     req.on('data', chunk => chunks.push(chunk));
@@ -100,7 +104,7 @@ export function createProxyServer({ upstreamHost = OLLAMA_HOST, upstreamPort = O
           payload = raw; // Not JSON: forward untouched.
         }
       }
-      const upstream = httpRequest({
+      const upstream = (upstreamSecure ? httpsRequest : httpRequest)({
         hostname: upstreamHost,
         port: upstreamPort,
         path: req.url,
