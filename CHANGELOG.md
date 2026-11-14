@@ -11,6 +11,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0] - 2026-11-14
+
 ### Summary
 
 | Area | Upstream | This fork |
@@ -24,7 +26,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 | Runtime updates | manual | **`check-update` with pinned-version rollback** |
 | Community PRs | — | **two open upstream PRs adopted** (#43, #47) |
 | Attachments | picker only, images as file paths | **paste, drop, and real image blocks** |
-| Tests | 50 | **90** |
+| Tests | 50 | **106** |
 | Node.js pin | one location | launcher, POSIX launcher, CI matrix, `engines`, README |
 
 Upstream has one later commit, `dfdc58d` (a sponsor button), that this fork does not include.
