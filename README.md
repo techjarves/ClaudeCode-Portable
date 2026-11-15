@@ -43,7 +43,7 @@ App-owned runtimes, provider settings, chat history, attachments, caches, and lo
 | Feature | Details |
 |---|---|
 | **Official Claude Code** | Uses Anthropic's official CLI and Agent SDK — no replacement agent engine |
-| **9 AI Providers** | NVIDIA NIM · DeepSeek · OpenRouter · Google Gemini · Anthropic · OpenAI · Ollama · LM Studio · Custom API |
+| **10 AI Providers** | NVIDIA NIM · DeepSeek · MiniMax · OpenRouter · Google Gemini · Anthropic · OpenAI · Ollama · LM Studio · Custom API |
 | **Portable Runtime** | Node.js, Claude Code, caches, settings, and app data stay in the project folder |
 | **Studio Dashboard** | Streaming chat, Markdown, code highlighting, compact tool steps, approvals, attachments, and diagnostics |
 | **Shared Claude History** | GUI and portable terminal sessions use real Claude Code conversation IDs and can resume the same history |
@@ -123,6 +123,7 @@ Pressing Enter selects the dashboard.
 |---|---|---|
 | **NVIDIA NIM** | Chat Completions adapter | [build.nvidia.com](https://build.nvidia.com) |
 | **DeepSeek** | Anthropic-compatible API | [platform.deepseek.com](https://platform.deepseek.com) |
+| **MiniMax** | Chat Completions adapter | [platform.minimax.io](https://platform.minimax.io) |
 | **OpenRouter** | Anthropic-compatible API | [openrouter.ai](https://openrouter.ai) |
 | **Google Gemini** | Chat Completions adapter | [aistudio.google.com](https://aistudio.google.com) |
 | **Anthropic Claude** | Native Messages API / terminal login | [console.anthropic.com](https://console.anthropic.com) |
@@ -132,6 +133,14 @@ Pressing Enter selects the dashboard.
 | **Custom API** | Chat Completions or Responses API | Provider base URL + optional API key |
 
 > **Non-Claude models are experimental and are not supported by Anthropic.** Tool calling, images, context limits, resume behavior, and other Claude Code features depend on the selected model and provider.
+
+### MiniMax
+
+The MiniMax preset defaults to **MiniMax-M3.1-Flash** and offers **MiniMax-M3** as the second model. Both have a 1,000,000-token context window. Existing saved models and manually entered IDs remain unchanged. Use `https://api.minimax.io/v1` globally or `https://api.minimaxi.com/v1` in China with the matching API key.
+
+The built-in Chat Completions adapter uses adaptive thinking by default for these models. Flash always thinks and defaults to `max` reasoning effort; its supported effort values are `low`, `medium`, `high`, `xhigh`, and `max`. M3 also accepts disabled thinking and ignores effort. Flash does not accept `service_tier` or `reasoning_split=false`. The dashboard preserves its existing image attachment support; video input is not implemented by this adapter.
+
+See MiniMax's [model documentation](https://platform.minimax.io/docs/guides/models-intro.md) and [Chat Completions API](https://platform.minimax.io/docs/api-reference/text-chat-openai.md).
 
 ## Custom OpenAI-Compatible Provider
 

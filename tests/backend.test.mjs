@@ -16,8 +16,8 @@ const { pickWorkspace }=await import('../lib/workspace-picker.mjs');
 const { nativeSessionId }=await import('../lib/native-sessions.mjs');
 test.after(()=>rmSync(temp,{recursive:true,force:true}));
 const profile={provider:'custom',model:'test-model',auth:'api',baseUrl:'http://127.0.0.1:9099/v1',key:'test-secret-not-real'};
-test('all nine providers and safe configuration round trips',()=>{
-  assert.equal(Object.keys(PROVIDERS).length,9);saveProfile({...profile,contextWindow:128000});
+test('all ten providers and safe configuration round trips',()=>{
+  assert.equal(Object.keys(PROVIDERS).length,10);assert.equal(PROVIDERS.minimax.defaultModel,'MiniMax-M3.1-Flash');assert.equal(PROVIDERS.minimax.baseUrl,'https://api.minimax.io/v1');assert.equal(PROVIDERS.minimax.endpoints[1].baseUrl,'https://api.minimaxi.com/v1');saveProfile({...profile,contextWindow:128000});
   assert.equal(readConfig().profiles.custom.contextWindow,128000);assert.throws(()=>saveProfile({...profile,contextWindow:100}),/Context window/);
   assert.equal(readConfig().profiles.custom.key,profile.key);assert.equal(publicConfig().profiles.custom.hasKey,true);assert.equal(publicConfig().profiles.custom.key,undefined);
   saveProfile({...profile,key:undefined,model:'next'});assert.equal(readConfig().profiles.custom.key,profile.key);saveProfile(profile);
