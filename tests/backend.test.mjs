@@ -16,14 +16,16 @@ const { pickWorkspace }=await import('../lib/workspace-picker.mjs');
 const { nativeSessionId }=await import('../lib/native-sessions.mjs');
 test.after(()=>rmSync(temp,{recursive:true,force:true}));
 const profile={provider:'custom',model:'test-model',auth:'api',baseUrl:'http://127.0.0.1:9099/v1',key:'test-secret-not-real'};
-test('all nine providers and safe configuration round trips',()=>{
-  assert.equal(Object.keys(PROVIDERS).length,9);saveProfile({...profile,contextWindow:128000});
+test('all ten providers and safe configuration round trips',()=>{
+  assert.equal(Object.keys(PROVIDERS).length,10);saveProfile({...profile,contextWindow:128000});
   assert.equal(readConfig().profiles.custom.contextWindow,128000);assert.throws(()=>saveProfile({...profile,contextWindow:100}),/Context window/);
   assert.equal(readConfig().profiles.custom.key,profile.key);assert.equal(publicConfig().profiles.custom.hasKey,true);assert.equal(publicConfig().profiles.custom.key,undefined);
   saveProfile({...profile,key:undefined,model:'next'});assert.equal(readConfig().profiles.custom.key,profile.key);saveProfile(profile);
   assert.equal(redact(`value ${profile.key}`),'value [REDACTED]');
   assert.throws(()=>validateBaseURL('http://remote.example/v1'),/HTTPS/);assert.throws(()=>validateBaseURL('https://key:secret@example.com'),/without credentials/);
   saveProfile({provider:'openrouter',model:'free-test',auth:'api',baseUrl:'https://openrouter.ai/api/v1',key:'fixture-key'});assert.equal(readConfig().profiles.openrouter.baseUrl,'https://openrouter.ai/api');
+  saveProfile({provider:'requesty',model:'openai/gpt-4o-mini',auth:'api',baseUrl:'https://router.eu.requesty.ai/v1',key:'fixture-key'});assert.equal(readConfig().profiles.requesty.baseUrl,'https://router.eu.requesty.ai');
+  saveProfile({provider:'requesty',model:'openai/gpt-4o-mini',auth:'api',baseUrl:'https://router.requesty.ai.example.com/v1',key:'fixture-key'});assert.equal(readConfig().profiles.requesty.baseUrl,'https://router.requesty.ai.example.com/v1');
   assert.equal(activateProfile('openrouter').active,'openrouter');assert.throws(()=>activateProfile('gemini'),/Configure/);saveProfile(profile);
 });
 test('legacy config parsing handles CRLF and keeps equal signs',()=>{
@@ -42,6 +44,7 @@ test('connection test uses an authenticated provider endpoint and reports reject
   const candidate={provider:'openrouter',baseUrl:PROVIDERS.openrouter.baseUrl,key:'candidate-key'};
   const success=await testConnection(candidate,{fetcher:async(url,options)=>{request={url,options};return new Response('{}',{status:200,headers:{'content-type':'application/json'}});}});
   assert.equal(request.url,'https://openrouter.ai/api/v1/auth/key');assert.equal(request.options.headers.Authorization,'Bearer candidate-key');assert.equal(success.ok,true);
+  for(const [baseUrl,expected] of [[PROVIDERS.requesty.baseUrl,'https://router.requesty.ai/v1/models/managed'],['https://router.eu.requesty.ai','https://router.eu.requesty.ai/v1/models']]){await testConnection({provider:'requesty',baseUrl,key:'candidate-key'},{fetcher:async(url,options)=>{request={url,options};return new Response('{}',{status:200});}});assert.equal(request.url,expected);assert.equal(request.options.headers.Authorization,'Bearer candidate-key');}
   await assert.rejects(testConnection(candidate,{fetcher:async()=>new Response(JSON.stringify({error:{message:'API key expired: candidate-key'}}),{status:401,headers:{'content-type':'application/json'}})}),error=>/credential was rejected.*API key expired.*\[REDACTED\]/i.test(error.message));
 });
 test('session workspace trust, traversal rejection, fingerprint and recovery',()=>{
