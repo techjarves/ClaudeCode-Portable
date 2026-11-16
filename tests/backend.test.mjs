@@ -102,6 +102,7 @@ test('SDK bridge forwards approval decisions, stores real session IDs and resume
   const store=new SessionStore(join(temp,'agent-sessions'));const s=store.create({workspace:temp,profile:p,trusted:true});let decisions=[],resumes=[],prompts=[],visible=[];
   const manager=new AgentManager(store,{executable:()=>'/fake/claude',sdkLoader:async()=>({query:({prompt,options})=>{
     prompts.push(prompt);resumes.push(options.resume);const q=(async function*(){yield {type:'system',subtype:'init',session_id:'sdk-session-123'};
+      assert.equal(options.effort,'high');
       decisions.push(await options.canUseTool('Write',{file_path:'file.txt',content:'hello'},{signal:new AbortController().signal,toolUseID:'tool1'}));
       yield {type:'assistant',message:{id:'a',content:[{type:'text',text:'Done.'}]}};
       yield {type:'result',session_id:'sdk-session-123',is_error:false,usage:{input_tokens:10,output_tokens:5},total_cost_usd:0.001};})();q.close=()=>{};return q;
@@ -116,10 +117,10 @@ test('SDK bridge forwards approval decisions, stores real session IDs and resume
 test('OpenAI adapters resume the same native Claude conversation',async()=>{
   saveProfile(profile);const p=readConfig().profiles.custom;
   const store=new SessionStore(join(temp,'adapter-handoff-sessions')),s=store.create({workspace:temp,profile:p,trusted:true});const calls=[];let turn=0;
-  const manager=new AgentManager(store,{executable:()=>'/fake/claude',sdkLoader:async()=>({query:({prompt,options})=>{calls.push({prompt,resume:options.resume});const q=(async function*(){yield {type:'system',subtype:'init',session_id:`fresh-${++turn}`};yield {type:'assistant',message:{id:`a-${turn}`,content:[{type:'text',text:turn===1?'Your name is usaram.':'It is usaram.'}]}};yield {type:'result',is_error:false};})();q.close=()=>{};return q;}})});
+  const manager=new AgentManager(store,{executable:()=>'/fake/claude',sdkLoader:async()=>({query:({prompt,options})=>{calls.push({prompt,resume:options.resume,effort:options.effort,thinking:options.thinking});const q=(async function*(){yield {type:'system',subtype:'init',session_id:`fresh-${++turn}`};yield {type:'assistant',message:{id:`a-${turn}`,content:[{type:'text',text:turn===1?'Your name is usaram.':'It is usaram.'}]}};yield {type:'result',is_error:false};})();q.close=()=>{};return q;}})});
   await(await manager.start(s.id,'my name is usaram')).promise;
   await(await manager.start(s.id,"what's my name?")).promise;
-  assert.equal(calls[1].resume,'fresh-1');assert.equal(calls[1].prompt,"what's my name?");
+  assert.equal(calls[1].resume,'fresh-1');assert.equal(calls[1].prompt,"what's my name?");assert.equal(calls[1].effort,'high');assert.deepEqual(calls[1].thinking,{type:'disabled'});
 });
 test('native Claude terminal conversations are imported with their project and timeline',()=>{
   assert.equal(nativeSessionId('C:\\Users\\Tech Jarves\\data\\claude\\custom-api\\projects\\fixture\\11111111-2222-4333-8444-555555555555.jsonl'),'11111111-2222-4333-8444-555555555555');

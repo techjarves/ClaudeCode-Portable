@@ -2,12 +2,12 @@ import { marked } from '/vendor/marked.js';
 import DOMPurify from '/vendor/purify.js';
 import hljs from '/vendor/highlight.js';
 import { icon, hydrateIcons } from '/icons.js';
-import { ComposerRequests } from '/requests.js';
+import { ComposerRequests, dashboardCommand } from '/requests.js';
 
 const $=s=>document.querySelector(s);
 const $$=s=>[...document.querySelectorAll(s)];
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const state={config:{profiles:{}},providers:{},sessions:[],legacy:[],current:null,workspace:'',projectless:true,expandedProjects:new Set(),runtime:{},responseTimeoutMs:120000,page:'studio',selectedProvider:'anthropic',models:[],attachments:[],running:false,runStatus:'idle',runStartedAt:null,runTimer:null,lastRunDurationMs:0,followOutput:true,durationNote:null,permissionMode:'default',activePermissionMode:'default',streaming:null,waiting:null,tools:new Map(),thinking:new Map(),seenEvents:new Set(),requestController:null};
+const state={config:{profiles:{}},providers:{},sessions:[],legacy:[],current:null,workspace:'',projectless:true,expandedProjects:new Set(),runtime:{},responseTimeoutMs:120000,page:'studio',selectedProvider:'anthropic',models:[],attachments:[],running:false,runStatus:'idle',runStartedAt:null,runTimer:null,lastRunDurationMs:0,followOutput:true,durationNote:null,permissionMode:'default',activePermissionMode:'default',streaming:null,waiting:null,tools:new Map(),thinking:new Map(),seenEvents:new Set(),requestController:null,autodev:{runs:[],active:0,latest:null,sequences:new Map(),syncing:new Set(),pendingSync:new Set(),retryAttempts:new Map(),retryTimers:new Map(),syncTimers:new Map()},autodevSources:new Map()};
 let token=new URLSearchParams(location.hash.slice(1)).get('token')||sessionStorage.getItem('portable-token')||'';
 if(token){sessionStorage.setItem('portable-token',token);history.replaceState(null,'',location.pathname);}
 const profile=()=>state.config.profiles[state.config.active];
@@ -399,6 +399,39 @@ function renderEvent(event,replay=false,sessionId=state.current?.id){
   if(event.type==='end'){setRunStatus(event.status,$('#run-status').classList.contains('error')?$('#run-status').textContent:undefined);state.streaming?.classList.remove('streaming');state.streaming=null;refreshSessions().catch(()=>{});}
   normalizeAssistantHeaders();
 }
+const autodevActive=new Set(['queued','planning','running','reviewing','repairing','quality','pending_approval']);
+function autodevApproval(run){return (run.approvals||[]).find(item=>item.status==='pending');}
+function renderAutoDev(){
+  const runs=state.autodev.runs||[],panel=$('#autodev-panel');$('#autodev-count').textContent=state.autodev.available===false?'—':runs.length;
+  panel.innerHTML=state.autodev.available===false
+    ? `<div class="autodev-unavailable" role="status"><strong>AutoDev unavailable</strong><p>${escape(state.autodev.error||'The autonomous development service could not be loaded. Restart the studio after resolving the runtime or ledger error.')}</p></div>`
+    : runs.length?runs.map(run=>{const pending=autodevApproval(run),packages=run.packages||[],done=packages.filter(item=>item.status==='succeeded').length,resumable=run.status==='interrupted'||run.status==='blocked',canApprove=pending?.kind==='destination-integration';return `<article class="autodev-run" data-autodev-run="${escape(run.id)}"><div><strong>${escape(run.mode)}</strong><span class="autodev-state">${escape(run.status)}</span></div><p>${escape(run.phase||'Queued')} · ${done}/${packages.length} packages</p>${pending?`<div class="autodev-approval"><small>${escape(pending.summary||pending.action)}</small>${canApprove?'':`<small>This critical action needs an application-owned executor and cannot be approved here.</small>`}<button type="button" data-autodev-deny="${escape(pending.id)}">Deny</button>${canApprove?`<button type="button" data-autodev-approve="${escape(pending.id)}">Approve</button>`:''}</div>`:''}${resumable?'<button type="button" class="autodev-resume" data-autodev-resume>Resume run</button>':''}${autodevActive.has(run.status)?`<button type="button" class="autodev-cancel" data-autodev-cancel>Cancel run</button>`:''}</article>`;}).join(''):'<p class="muted">Use /auto-dev, /multi-review, /deep-review, or /agent-status.</p>';
+  $$('[data-autodev-approve],[data-autodev-deny]').forEach(button=>button.onclick=async()=>{const card=button.closest('[data-autodev-run]'),approved=button.hasAttribute('data-autodev-approve'),approvalId=button.dataset.autodevApprove||button.dataset.autodevDeny;try{await api(`/api/autodev/runs/${encodeURIComponent(card.dataset.autodevRun)}/approve`,{approvalId,approved});await refreshAutoDev();}catch(error){toast(error.message);}});
+  $$('[data-autodev-resume]').forEach(button=>button.onclick=async()=>{const id=button.closest('[data-autodev-run]').dataset.autodevRun;try{await api(`/api/autodev/runs/${encodeURIComponent(id)}/resume`,{});await refreshAutoDev();watchAutoDev(id);}catch(error){toast(error.message);}});
+  $$('[data-autodev-cancel]').forEach(button=>button.onclick=async()=>{const id=button.closest('[data-autodev-run]').dataset.autodevRun;try{await api(`/api/autodev/runs/${encodeURIComponent(id)}/cancel`,{});await refreshAutoDev();}catch(error){toast(error.message);}});
+}
+async function refreshAutoDev(){const data=await api('/api/autodev/runs');state.autodev.runs=data.runs;state.autodev.active=data.runs.filter(run=>autodevActive.has(run.status)).length;state.autodev.latest=data.runs[0]||null;for(const run of data.runs)state.autodev.sequences.set(run.id,Math.max(state.autodev.sequences.get(run.id)||0,run.lastSequence||0));renderAutoDev();for(const run of data.runs)if(autodevActive.has(run.status))watchAutoDev(run.id);}
+async function syncAutoDevRun(id){
+  if(state.autodev.syncing.has(id)){state.autodev.pendingSync.add(id);return;}state.autodev.syncing.add(id);
+  try{const data=await api(`/api/autodev/runs/${encodeURIComponent(id)}`),run=data.run,index=state.autodev.runs.findIndex(item=>item.id===id);if(index<0)state.autodev.runs.unshift(run);else state.autodev.runs[index]=run;state.autodev.sequences.set(id,Math.max(state.autodev.sequences.get(id)||0,run.lastSequence||run.events?.at(-1)?.sequence||0));renderAutoDev();if(!autodevActive.has(run.status)){state.autodev.retryAttempts.delete(id);clearTimeout(state.autodev.retryTimers.get(id));state.autodev.retryTimers.delete(id);clearTimeout(state.autodev.syncTimers.get(id));state.autodev.syncTimers.delete(id);state.autodevSources.get(id)?.abort();}}catch(error){toast(error.message);}finally{state.autodev.syncing.delete(id);if(state.autodev.pendingSync.delete(id))queueMicrotask(()=>syncAutoDevRun(id));}
+}
+function scheduleAutoDevSync(id){
+  if(state.autodev.syncTimers.has(id))return;
+  state.autodev.syncTimers.set(id,setTimeout(()=>{state.autodev.syncTimers.delete(id);syncAutoDevRun(id);},100));
+}
+function retryAutoDev(id){
+  const run=state.autodev.runs.find(item=>item.id===id);if(!autodevActive.has(run?.status)||state.autodev.retryTimers.has(id))return;
+  const attempt=Math.min(6,(state.autodev.retryAttempts.get(id)||0)+1);state.autodev.retryAttempts.set(id,attempt);
+  const timer=setTimeout(()=>{state.autodev.retryTimers.delete(id);const current=state.autodev.runs.find(item=>item.id===id);if(autodevActive.has(current?.status))watchAutoDev(id);},Math.min(30000,1000*2**(attempt-1)));
+  state.autodev.retryTimers.set(id,timer);
+}
+function watchAutoDev(id){
+  if(state.autodevSources.has(id))return;clearTimeout(state.autodev.retryTimers.get(id));state.autodev.retryTimers.delete(id);const controller=new AbortController();state.autodevSources.set(id,controller);const after=state.autodev.sequences.get(id)||0;
+  let connected=false,failed=false;
+  fetch(`/api/autodev/runs/${encodeURIComponent(id)}/events?after=${after}`,{headers:{'X-Portable-Token':token},signal:controller.signal}).then(async response=>{if(!response.ok)throw new Error((await response.json()).error||'AutoDev stream failed');connected=true;state.autodev.retryAttempts.delete(id);const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let n,changed=false;while((n=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,n);buffer=buffer.slice(n+2);const raw=frame.split('\n').filter(line=>line.startsWith('data:')).map(line=>line.slice(5).trim()).join('\n');if(raw){const event=JSON.parse(raw);state.autodev.sequences.set(id,Math.max(state.autodev.sequences.get(id)||0,event.sequence||0));changed=true;}}if(changed)scheduleAutoDevSync(id);}}).catch(error=>{if(error.name!=='AbortError'){failed=true;if(!connected)toast(error.message);}}).finally(async()=>{if(state.autodevSources.get(id)===controller)state.autodevSources.delete(id);if(controller.signal.aborted)return;clearTimeout(state.autodev.syncTimers.get(id));state.autodev.syncTimers.delete(id);await syncAutoDevRun(id);if(failed||autodevActive.has(state.autodev.runs.find(item=>item.id===id)?.status))retryAutoDev(id);});
+}
+function showAgentStatus(data){const summary=data.summary||data,latest=summary.latest;addMessage('assistant',latest?`AutoDev: ${summary.active} active of ${summary.total} runs. Latest ${latest.mode} run ${latest.id} is ${latest.status}${latest.phase?` in ${latest.phase}`:''}.`:`AutoDev has no runs yet.`);}
+
 async function consumeRun(path,body,sessionId=state.current?.id){
   const controller=new AbortController();state.requestController=controller;
   if(body&&state.current?.id===sessionId)setRunStatus('queued');
@@ -414,6 +447,15 @@ async function consumeRun(path,body,sessionId=state.current?.id){
 $('#composer').onsubmit=async e=>{
   e.preventDefault();if(requests.active){await requests.submit();return;}if(state.running)return;const written=$('#prompt').value.trim();if(!written&&!state.attachments.length)return;
   try{
+    const command=dashboardCommand(written);
+    if(command){
+      if(state.autodev.available===false)throw new Error(state.autodev.error||'AutoDev is unavailable. Restart the studio after resolving the runtime or ledger error.');
+      if(state.attachments.length)throw new Error('AutoDev commands do not accept chat attachments. Include a path in the command.');
+      $('#prompt').value='';$('#prompt').style.height='';syncComposer();setPage('studio');
+      addMessage('user',written);const data=await api('/api/autodev/command',{message:written,target:state.projectless?undefined:state.workspace});
+      if(command==='/agent-status')showAgentStatus(data);else{addMessage('assistant',`Started ${data.run.mode} run ${data.run.id}. Track package and phase status in the run inspector.`);await refreshAutoDev();watchAutoDev(data.run.id);}
+      return;
+    }
     if(!await ensureSession())return;
     const uploaded=state.attachments.length?await uploadAttachments():[];
     const prompt=written||'Please inspect the attached files and help me continue this project.';
@@ -489,7 +531,10 @@ $('#pull-form').onsubmit=async e=>{e.preventDefault();const model=$('#pull-name'
 for(const [id,action]of[['runtime-install','install'],['runtime-rollback','rollback']])$(`#${id}`).onclick=async()=>{if(!await confirmAction(action==='install'?'Repair / update runtime?':'Roll back runtime?','All active turns must be stopped. The current working installation is preserved until the replacement is verified.','Continue'))return;busy($(`#${id}`),async()=>{formMessage('#runtime-message','Runtime maintenance in progress. This can take several minutes.');state.runtime=await api('/api/runtime',{action});updateHeader();formMessage('#runtime-message','Runtime ready. Restart the studio before starting another session.');}).catch(e=>formMessage('#runtime-message',e.message,true));};
 
 async function init(){
-  const data=await api('/api/bootstrap');Object.assign(state,{config:data.config,providers:data.providers,sessions:data.sessions,runtime:data.runtime,workspace:data.workspace,responseTimeoutMs:data.responseTimeoutMs||state.responseTimeoutMs});
-  $('#health-connection').textContent='Connected';updateHeader();resetSession();renderProviders();await refreshSessions();$('#send').disabled=true;
+  const data=await api('/api/bootstrap');Object.assign(state,{config:data.config,providers:data.providers,sessions:data.sessions,runtime:data.runtime,workspace:data.workspace,responseTimeoutMs:data.responseTimeoutMs||state.responseTimeoutMs,autodev:{...state.autodev,...data.autodev}});
+  $('#health-connection').textContent='Connected';updateHeader();resetSession();renderProviders();renderAutoDev();
+  const refreshes=[refreshSessions()];
+  if(state.autodev.available!==false)refreshes.push(refreshAutoDev());
+  await Promise.all(refreshes);$('#send').disabled=true;
 }
 init().catch(e=>{$('#connection').innerHTML='<span class="status-dot failed"></span>Disconnected';$('#health-connection').textContent='Disconnected';setRunStatus('failed',e.message);toast(e.message);});

@@ -2,6 +2,13 @@ import { icon } from './icons.js';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
+export const DASHBOARD_COMMANDS=Object.freeze(['/auto-dev','/multi-review','/deep-review','/agent-status']);
+export function dashboardCommand(value){
+  if(typeof value!=='string')return null;
+  const match=/^\/(auto-dev|multi-review|deep-review|agent-status)(?=$|[ \t])/.exec(value);
+  return match?`/${match[1]}`:null;
+}
+
 // One interaction surface for runtime questions and approval requests. The normal
 // message draft is restored after the queue has been answered or cancelled.
 export class ComposerRequests {

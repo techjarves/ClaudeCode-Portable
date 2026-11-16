@@ -15,11 +15,122 @@ import { localStatus, startLocal, stopLocal, pullModel } from '../lib/local-mode
 import { sessionTranscript } from '../lib/transcript.mjs';
 import { pickWorkspace } from '../lib/workspace-picker.mjs';
 import { removeAttachments, resolveAttachments, saveAttachments } from '../lib/attachments.mjs';
+import { parseAutoDevCommand } from '../lib/autodev/commands.mjs';
 
-export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||3000),store=new SessionStore(),manager,token=randomBytes(32).toString('hex'),workspacePicker=pickWorkspace,connectionTester=testConnection}={}) {
-  store.recover(); manager ||= new AgentManager(store);
+const ACTIVE_AUTODEV = new Set(['queued','planning','running','reviewing','repairing','quality','pending_approval']);
+const AUTODEV_ROOT = join(DATA,'autodev');
+const AUTODEV_LEDGER = join(AUTODEV_ROOT,'ledger.json');
+const AUTODEV_LIST_LIMIT = 100;
+const AUTODEV_SCAN_PAGE = 1000;
+const AUTODEV_EVENT_REPLAY_LIMIT = 1000;
+const AUTODEV_SSE_QUEUE_LIMIT = 256*1024;
+
+function unavailableAutoDevManager(error) {
+  const message=redact(error?.message||'AutoDev runtime is unavailable');
+  const unavailable=()=>{throw Object.assign(new Error(`AutoDev unavailable: ${message}`),{status:503});};
+  return {available:false,error:message,list:async()=>[],create:unavailable,start:unavailable,status:unavailable,events:unavailable,approve:unavailable,cancel:unavailable,resume:unavailable,close(){}};
+}
+
+async function defaultAutoDevManager({repo=ROOT}={}) {
+  try{
+    const {createAutoDevRegistry}=await import('../lib/autodev/registry.mjs');
+    return await createAutoDevRegistry({
+      root:repo,
+      indexFile:join(AUTODEV_ROOT,'repositories.json'),
+      ledgerRoot:join(AUTODEV_ROOT,'repositories'),
+      legacyLedger:AUTODEV_LEDGER,
+    });
+  }catch(error){
+    return unavailableAutoDevManager(error);
+  }
+}
+
+function runSummary(run) {
+  if(!run)return null;
+  const {events=[],report,...summary}=run;
+  return {...summary,eventCount:events.length,lastSequence:events.at(-1)?.sequence??0,...(report?{report}: {})};
+}
+
+function pageParameter(url,name,{fallback,min=0,max=1000}={}) {
+  const raw=url.searchParams.get(name);
+  if(raw===null)return fallback;
+  const value=Number(raw);
+  if(!Number.isSafeInteger(value)||value<min||value>max){
+    throw Object.assign(new Error(`${name} must be an integer from ${min} to ${max}`),{status:400});
+  }
+  return value;
+}
+
+function autodevSummary(runs,{available=true,error,total=runs.length,active}={}) {
+  const ordered=[...runs].sort((a,b)=>String(b.updatedAt||b.createdAt||'').localeCompare(String(a.updatedAt||a.createdAt||'')));
+  return {available,...(!available&&error?{error}:{}),total,active:active??ordered.filter(run=>ACTIVE_AUTODEV.has(run.status)).length,latest:runSummary(ordered[0])};
+}
+
+export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||3000),store=new SessionStore(),manager,autodev,createAutodev=defaultAutoDevManager,token=randomBytes(32).toString('hex'),workspacePicker=pickWorkspace,connectionTester=testConnection,runtimeInstaller=installRuntime,runtimeRollback=rollbackRuntime,maxActiveAutoDevRuns=3}={}) {
+  store.recover();manager ||= new AgentManager(store);
+  if(!autodev){
+    try{autodev=await createAutodev({repo:ROOT});}
+    catch(error){autodev=unavailableAutoDevManager(error);}
+  }
+  if(!Number.isSafeInteger(maxActiveAutoDevRuns)||maxActiveAutoDevRuns<1)throw new TypeError('maxActiveAutoDevRuns must be a positive integer');
   mkdirSync(LOGS,{recursive:true});
-  let origin; let maintenance=false; let restartRequired=false; const pulls=new Set();
+  let origin;let maintenance=false;let restartRequired=false;let autodevAdmissionQueue=Promise.resolve();const pulls=new Set();
+  const listAutoDev=(options={})=>autodev.list(options);
+  const scanAutoDev=async()=>{
+    const runs=[];
+    for(let offset=0;;offset+=AUTODEV_SCAN_PAGE){
+      const page=await listAutoDev({limit:AUTODEV_SCAN_PAGE,offset});
+      runs.push(...page);
+      if(page.length<AUTODEV_SCAN_PAGE)break;
+    }
+    return runs;
+  };
+  const activeAutoDev=async()=> (await scanAutoDev()).filter(run=>ACTIVE_AUTODEV.has(run.status));
+  const assertAutoDevRunnable=()=>{
+    if(maintenance)throw Object.assign(new Error('Runtime maintenance is in progress'),{status:409});
+    if(restartRequired)throw Object.assign(new Error('Runtime changed. Restart the studio before resuming AutoDev.'),{status:409});
+  };
+  const admitAutoDev=(operation,{runId}={})=>{
+    const admitted=autodevAdmissionQueue.then(async()=>{
+      assertAutoDevRunnable();
+      const active=await activeAutoDev();
+      const others=runId?active.filter(run=>run.id!==runId):active;
+      if(others.length>=maxActiveAutoDevRuns){
+        throw Object.assign(new Error(`AutoDev already has ${maxActiveAutoDevRuns} active runs`),{status:429});
+      }
+      return operation();
+    });
+    autodevAdmissionQueue=admitted.catch(()=>{});
+    return admitted;
+  };
+  const acquireRuntimeMaintenance=()=>{
+    const acquired=autodevAdmissionQueue.then(async()=>{
+      if(maintenance)throw new Error('Stop active turns before runtime maintenance');
+      maintenance=true;
+      try{
+        if(manager.runs.size)throw new Error('Stop active turns before runtime maintenance');
+        if((await activeAutoDev()).length)throw new Error('Stop active AutoDev runs before runtime maintenance');
+        if(manager.runs.size)throw new Error('Stop active turns before runtime maintenance');
+      }catch(error){maintenance=false;throw error;}
+    });
+    autodevAdmissionQueue=acquired.catch(()=>{});
+    return acquired;
+  };
+  const createAutoDevRun=input=>admitAutoDev(()=>autodev.create(input));
+  const resumeAutoDevRun=id=>admitAutoDev(()=>autodev.resume(id),{runId:id});
+  const autoDevOverview=async()=>{
+    const runs=await scanAutoDev();
+    return autodevSummary(runs.slice(0,AUTODEV_LIST_LIMIT),{
+      available:autodev.available!==false,
+      error:autodev.error,
+      total:runs.length,
+      active:runs.filter(run=>ACTIVE_AUTODEV.has(run.status)).length,
+    });
+  };
+  const bootstrapAutoDev=async()=>{
+    try{return await autoDevOverview();}
+    catch(error){return autodevSummary([],{available:false,error:redact(error.message||'AutoDev runtime is unavailable'),total:0,active:0});}
+  };
   const staticFiles={
     '/':'dashboard/index.html','/app.js':'dashboard/app.js','/requests.js':'dashboard/requests.js','/styles.css':'dashboard/styles.css','/icons.js':'dashboard/icons.js',
     '/vendor/marked.js':join(RUNTIME,'node_modules/marked/lib/marked.esm.js'),
@@ -46,7 +157,88 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
       if(!['GET','POST','DELETE'].includes(req.method))return json(res,405,{error:'Method not allowed'});
       if(req.method==='POST'&&!req.headers['content-type']?.startsWith('application/json'))return json(res,415,{error:'JSON required'});
       const body=req.method==='POST'?await readBody(req,url.pathname.endsWith('/attachments')?28*1024*1024:4*1024*1024):{};
-      if(url.pathname==='/api/bootstrap'&&req.method==='GET'){const config=readConfig();store.syncNative(config,new Set(manager.runs.keys()));return json(res,200,{config:publicConfig(config),providers:PROVIDERS,adapterOptions:['builtin','external','responses'],externalAdapterAvailable:externalAdapterAvailable(),sessions:store.list(),runtime:await runtimeStatus(),workspace:ROOT,responseTimeoutMs:manager.responseTimeoutMs});}
+      if(url.pathname==='/api/bootstrap'&&req.method==='GET'){const config=readConfig(),autodevState=await bootstrapAutoDev();store.syncNative(config,new Set(manager.runs.keys()));return json(res,200,{config:publicConfig(config),providers:PROVIDERS,adapterOptions:['builtin','external','responses'],externalAdapterAvailable:externalAdapterAvailable(),sessions:store.list(),runtime:await runtimeStatus(),workspace:ROOT,responseTimeoutMs:manager.responseTimeoutMs,autodev:autodevState});}
+      if(url.pathname==='/api/autodev/runs'&&req.method==='GET'){
+        const limit=pageParameter(url,'limit',{fallback:AUTODEV_LIST_LIMIT,min:1,max:AUTODEV_LIST_LIMIT}),offset=pageParameter(url,'offset',{fallback:0,max:Number.MAX_SAFE_INTEGER});
+        const runs=await listAutoDev({limit,offset});return json(res,200,{runs:runs.map(runSummary),limit,offset,hasMore:runs.length===limit});
+      }
+      if(url.pathname==='/api/autodev/command'&&req.method==='POST'){
+        const parsed=parseAutoDevCommand(body.message);
+        if(!parsed)return json(res,200,{handled:false});
+        if(parsed.action==='status'){
+          const summary=await autoDevOverview(),runs=await listAutoDev({limit:AUTODEV_LIST_LIMIT});return json(res,200,{handled:true,command:parsed.command,summary,runs:runs.map(runSummary)});
+        }
+        if(!parsed.argument)return json(res,400,{error:`${parsed.command} requires a request`});
+        const target=body.target??ROOT;if(typeof target!=='string'||!target)return json(res,400,{error:'target must be a path'});
+        const run=await createAutoDevRun({mode:parsed.mode,request:parsed.argument,target,backend:body.backend,limits:body.limits,metadata:body.metadata});
+        if(body.start!==false)void Promise.resolve(autodev.start(run.id)).catch(error=>appendFileSync(join(LOGS,'dashboard.log'),`${new Date().toISOString()} AUTODEV ${run.id}: ${redact(error.message)}\n`,{mode:0o600}));
+        return json(res,201,{handled:true,command:parsed.command,run});
+      }
+      if(url.pathname==='/api/autodev/runs'&&req.method==='POST'){
+        const parsed=parseAutoDevCommand(body.command??body.prompt);
+        if(!parsed||parsed.action!=='create')return json(res,400,{error:'Use /auto-dev, /multi-review, or /deep-review with a request'});
+        if(!parsed.argument)return json(res,400,{error:`${parsed.command} requires a request`});
+        const target=body.target??ROOT;if(typeof target!=='string'||!target)return json(res,400,{error:'target must be a path'});
+        const run=await createAutoDevRun({mode:parsed.mode,request:parsed.argument,target,backend:body.backend,limits:body.limits,metadata:body.metadata});
+        if(body.start!==false)void Promise.resolve(autodev.start(run.id)).catch(error=>appendFileSync(join(LOGS,'dashboard.log'),`${new Date().toISOString()} AUTODEV ${run.id}: ${redact(error.message)}\n`,{mode:0o600}));
+        return json(res,201,{run});
+      }
+      if(url.pathname==='/api/autodev/status'&&req.method==='GET'){
+        const summary=await autoDevOverview(),runs=await listAutoDev({limit:AUTODEV_LIST_LIMIT});return json(res,200,{...summary,runs:runs.map(runSummary)});
+      }
+      const autoMatch=url.pathname.match(/^\/api\/autodev\/runs\/([^/]+)(?:\/(events|approve|cancel|resume))?$/);
+      if(autoMatch){
+        const id=decodeURIComponent(autoMatch[1]),action=autoMatch[2];
+        if(!action&&req.method==='GET')return json(res,200,{run:runSummary(await autodev.status(id))});
+        if(action==='approve'&&req.method==='POST'){
+          if(body.approved===true){
+            const decided=await admitAutoDev(async()=>{
+              const value=await autodev.approve(id,body.approvalId,true,body.detail??'');
+              void Promise.resolve(autodev.resume(id)).catch(error=>appendFileSync(join(LOGS,'dashboard.log'),`${new Date().toISOString()} AUTODEV ${id}: ${redact(error.message)}\n`,{mode:0o600}));
+              return value;
+            },{runId:id});
+            return json(res,202,{run:decided});
+          }
+          await autodev.approve(id,body.approvalId,false,body.detail??'');
+          const decided=await autodev.resume(id);
+          return json(res,202,{run:decided});
+        }
+        if(action==='cancel'&&req.method==='POST')return json(res,200,{run:await autodev.cancel(id,body.reason)});
+        if(action==='resume'&&req.method==='POST')return json(res,202,{run:await resumeAutoDevRun(id)});
+        if(action==='events'&&req.method==='GET'){
+          const afterValue=url.searchParams.get('after')??req.headers['last-event-id']??'0',after=Number(afterValue);
+          if(!Number.isSafeInteger(after)||after<0)return json(res,400,{error:'after must be a non-negative event sequence'});
+          let closed=false,started=false,blocked=false,unsubscribe=()=>{},heartbeat;
+          const pending=[];let pendingBytes=0;
+          const detach=()=>{if(closed)return;closed=true;clearInterval(heartbeat);res.off('drain',flush);unsubscribe();};
+          const enqueue=frame=>{
+            pending.push(frame);pendingBytes+=Buffer.byteLength(frame);
+            if(pendingBytes>AUTODEV_SSE_QUEUE_LIMIT){detach();res.destroy();return false;}
+            return true;
+          };
+          const write=frame=>{
+            if(closed||res.destroyed)return false;
+            if(!started||blocked)return enqueue(frame);
+            blocked=!res.write(frame);
+            return true;
+          };
+          const flush=()=>{
+            if(closed||!started)return;
+            blocked=false;
+            while(pending.length&&!blocked){
+              const frame=pending.shift();pendingBytes-=Buffer.byteLength(frame);blocked=!res.write(frame);
+            }
+          };
+          req.once('aborted',detach);res.once('close',detach);res.on('drain',flush);
+          const send=event=>write(`id: ${event.sequence}\ndata: ${JSON.stringify(event)}\n\n`);
+          try{unsubscribe=await autodev.events(id,{after,limit:AUTODEV_EVENT_REPLAY_LIMIT,listener:send});}
+          catch(error){detach();if(!res.headersSent)throw error;res.end();return;}
+          if(closed){unsubscribe();return;}
+          res.writeHead(200,{'Content-Type':'text/event-stream','Connection':'keep-alive','Cache-Control':'no-store'});started=true;flush();
+          heartbeat=setInterval(()=>{if(!closed)write(': keepalive\n\n');},15000);
+          return;
+        }
+      }
       if(url.pathname==='/api/config'&&req.method==='GET')return json(res,200,publicConfig());
       if(url.pathname==='/api/config/key'&&req.method==='GET'){
         const provider=url.searchParams.get('provider');if(!PROVIDERS[provider])throw new Error('Unknown provider');
@@ -54,11 +246,13 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
       }
       if(url.pathname==='/api/config/active'&&req.method==='POST'){
         if(manager.runs.size)throw new Error('Stop the active turn before switching models');
-        return json(res,200,activateProfile(body.provider));
+        if((await activeAutoDev()).length)throw new Error('Stop active AutoDev runs before switching models');
+        const result=activateProfile(body.provider);restartRequired=true;return json(res,200,result);
       }
       if(url.pathname==='/api/config'&&req.method==='POST'){
         if(manager.runs.size)throw new Error('Stop active turns before changing provider settings');
-        return json(res,200,saveProfile(body));
+        if((await activeAutoDev()).length)throw new Error('Stop active AutoDev runs before changing provider settings');
+        const result=saveProfile(body);restartRequired=true;return json(res,200,result);
       }
       if(url.pathname==='/api/models'&&req.method==='POST'){
         if(!PROVIDERS[body.provider])throw new Error('Unknown provider');
@@ -112,10 +306,9 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
         return json(res,200,{text:redact(readFileSync(join(LOGS,name),'utf8').slice(-50000))});
       }
       if(url.pathname==='/api/runtime'&&req.method==='POST'){
-        if(manager.runs.size||maintenance)throw new Error('Stop active turns before runtime maintenance');
         if(!['install','rollback'].includes(body.action))throw new Error('Unknown runtime action');
-        maintenance=true;
-        try{if(body.action==='rollback')await rollbackRuntime();else await installRuntime();restartRequired=true;return json(res,200,await runtimeStatus());}finally{maintenance=false;}
+        await acquireRuntimeMaintenance();
+        try{if(body.action==='rollback')await runtimeRollback();else await runtimeInstaller();restartRequired=true;return json(res,200,await runtimeStatus());}finally{maintenance=false;}
       }
       if(url.pathname==='/api/local'&&req.method==='POST'){
         if(body.action==='start')return json(res,200,await startLocal());
@@ -135,6 +328,6 @@ export async function startDashboard({port=Number(process.env.PORTABLE_AI_PORT||
   });
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});
   origin=`http://127.0.0.1:${server.address().port}`;
-  return {server,manager,token,origin,url:`${origin}/#token=${token}`,close:async()=>{pulls.forEach(c=>c.abort());await manager.close();try{if((await localStatus()).owned)stopLocal();}catch{}server.closeAllConnections();await new Promise(r=>server.close(r));}};
+  return {server,manager,autodev,token,origin,url:`${origin}/#token=${token}`,close:async()=>{pulls.forEach(c=>c.abort());await manager.close();await autodev.close?.();try{if((await localStatus()).owned)stopLocal();}catch{}server.closeAllConnections();await new Promise(r=>server.close(r));}};
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1])startDashboard().then(app=>{console.log(`ClaudeCode-Portable: ${app.url}`);for(const signal of ['SIGINT','SIGTERM'])process.once(signal,async()=>{await app.close();process.exit(0);});}).catch(e=>{console.error(e.message);process.exitCode=1;});
